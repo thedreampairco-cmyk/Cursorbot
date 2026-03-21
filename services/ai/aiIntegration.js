@@ -2,6 +2,7 @@ import axios from "axios";
 import { ENV } from "../../config/env.js";
 import { buildSystemPrompt } from "./buildSystemPrompt.js";
 import { getUserMemory } from "../data/memoryStore.js";
+import { handleError } from "../../errorHandler.js";
 
 const GROQ_URL = "https://api.groq.com/openai/v1/chat/completions";
 
@@ -30,6 +31,7 @@ export const generateAIResponse = async (chatId, userMessage) => {
           Authorization: `Bearer ${ENV.GROQ_API_KEY}`,
           "Content-Type": "application/json",
         },
+        timeout: 10000 // ⏱️ 10 sec timeout
       }
     );
 
@@ -40,11 +42,8 @@ export const generateAIResponse = async (chatId, userMessage) => {
     return aiText;
 
   } catch (error) {
-    console.error(
-      "❌ Groq API Error:",
-      error.response?.data || error.message
-    );
+    handleError("Groq AI", error);
 
-    return "⚠️ Maya is having trouble responding right now. Please try again.";
+    return "⚠️ I'm having a little delay right now... try again in a moment 🙏";
   }
 };

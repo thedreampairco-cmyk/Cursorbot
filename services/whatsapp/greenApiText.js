@@ -1,5 +1,6 @@
 import axios from "axios";
 import { ENV } from "../../config/env.js";
+import { handleError } from "../../errorHandler.js";
 
 const BASE_URL = `https://api.green-api.com/waInstance${ENV.GREEN_API_ID_INSTANCE}`;
 
@@ -16,6 +17,6 @@ export const sendTextMessage = async (chatId, message) => {
     return response.data;
 
   } catch (error) {
-    console.error("❌ Error sending message:", error.response?.data || error.message);
+    handleError("WhatsApp Send", error);
   }
 };
