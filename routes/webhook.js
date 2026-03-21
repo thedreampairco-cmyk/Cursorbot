@@ -1,5 +1,6 @@
 import express from "express";
 import { sendTextMessage } from "../services/whatsapp/greenApiText.js";
+import { generateAIResponse } from "../services/ai/aiIntegration.js";
 
 const router = express.Router();
 
@@ -12,7 +13,7 @@ router.post("/", async (req, res) => {
     // Acknowledge immediately
     res.sendStatus(200);
 
-    // ✅ Only incoming user messages
+    // ✅ Only process incoming user messages
     if (data.typeWebhook !== "incomingMessageReceived") {
       return;
     }
@@ -24,12 +25,12 @@ router.post("/", async (req, res) => {
 
     let userText = "";
 
-    // ✅ Handle normal text
+    // Handle normal text
     if (messageData.typeMessage === "textMessage") {
       userText = messageData.textMessageData?.textMessage;
     }
 
-    // ✅ Handle extended text (MOST IMPORTANT)
+    // Handle extended text
     if (messageData.typeMessage === "extendedTextMessage") {
       userText = messageData.extendedTextMessageData?.text;
     }
@@ -38,11 +39,10 @@ router.post("/", async (req, res) => {
 
     console.log("💬 User Message:", userText);
 
-    // TEMP RESPONSE
-    await sendTextMessage(
-      chatId,
-      "👋 Hello! Maya here. Your AI assistant is now active."
-    );
+    // 🔥 AI RESPONSE
+    const aiReply = await generateAIResponse(userText);
+
+    await sendTextMessage(chatId, aiReply);
 
   } catch (error) {
     console.error("❌ Webhook Error:", error);
