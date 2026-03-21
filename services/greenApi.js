@@ -3,7 +3,8 @@ require('dotenv').config();
 
 const GREEN_API_ID_INSTANCE = process.env.GREEN_API_ID_INSTANCE;
 const GREEN_API_API_TOKEN_INSTANCE = process.env.GREEN_API_API_TOKEN_INSTANCE;
-
+console.log("ID:", GREEN_API_ID_INSTANCE);
+console.log("TOKEN:", GREEN_API_API_TOKEN_INSTANCE);
 /**
  * Sends a standard text message via Green API.
  */
