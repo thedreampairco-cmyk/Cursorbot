@@ -1,5 +1,6 @@
 import axios from "axios";
 import { ENV } from "../../config/env.js";
+import { buildSystemPrompt } from "./buildSystemPrompt.js";
 
 const GROQ_URL = "https://api.groq.com/openai/v1/chat/completions";
 
@@ -10,6 +11,10 @@ export const generateAIResponse = async (userMessage) => {
       {
         model: "llama-3.3-70b-versatile",
         messages: [
+          {
+            role: "system",
+            content: buildSystemPrompt(),
+          },
           {
             role: "user",
             content: userMessage,
@@ -25,7 +30,8 @@ export const generateAIResponse = async (userMessage) => {
     );
 
     const aiText =
-      response.data?.choices?.[0]?.message?.content || "Sorry, I didn't understand that.";
+      response.data?.choices?.[0]?.message?.content ||
+      "Sorry, I didn't understand that.";
 
     return aiText;
 
