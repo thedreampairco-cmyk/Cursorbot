@@ -1,0 +1,12 @@
+[
+  {
+    "clientId": "12345", 
+    "businessName": "The Dream Pair",
+    "whatsappNumber": "91XXXXXXXXXX",
+    "greenApiUrl": "https://api.green-api.com/waInstance1101...",
+    "sheetId": "1ElneBHWnZjpyA-JYGmanZZ7aKvfjK-OsnrMbPpBAfUI",
+    "sheetTabGid": 2003749073,
+    "syncToken": "TDP_SECRET_789",
+    "status": "active"
+  }
+]
