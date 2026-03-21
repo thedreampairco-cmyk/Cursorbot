@@ -1,11 +1,14 @@
 import axios from "axios";
 import { ENV } from "../../config/env.js";
 import { buildSystemPrompt } from "./buildSystemPrompt.js";
+import { getUserMemory } from "../data/memoryStore.js";
 
 const GROQ_URL = "https://api.groq.com/openai/v1/chat/completions";
 
-export const generateAIResponse = async (userMessage) => {
+export const generateAIResponse = async (chatId, userMessage) => {
   try {
+    const history = getUserMemory(chatId);
+
     const response = await axios.post(
       GROQ_URL,
       {
@@ -15,6 +18,7 @@ export const generateAIResponse = async (userMessage) => {
             role: "system",
             content: buildSystemPrompt(),
           },
+          ...history,
           {
             role: "user",
             content: userMessage,
