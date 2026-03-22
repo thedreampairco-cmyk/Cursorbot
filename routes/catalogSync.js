@@ -1,41 +1,66 @@
-const express = require("express");
+'use strict';
+
+const express = require('express');
 const router = express.Router();
-// ✅ FIX: We import the function directly, NOT a 'greenApi' object
-const { setProduct } = require("../import");
+const cron = require('node-cron');
+const { asyncHandler, logger } = require('../errorHandler');
+const { fetchAndSyncCatalog } = require('../services/data/googleSheetsFetch');
+const memoryStore = require('../services/data/memoryStore');
+const env = require('../config/env');
 
-router.post("/sync-catalog", async (req, res) => {
-  try {
-    const syncToken = req.headers['x-sync-token'];
-
-    // Security Check
-    if (!syncToken || syncToken !== process.env.SYNC_TOKEN) {
-      console.log("⚠️ Unauthorized Sync Attempt");
-      return res.status(403).json({ error: "Unauthorized" });
-    }
-
-    const { id, name, category, price, stock, imageUrl, gender } = req.body;
-
-    // Build the WhatsApp Catalog Payload
-    const catalogPayload = {
-      productId: id.toString(),
-      name: `${name} (${gender})`,
-      price: parseFloat(price),
-      description: `Category: ${category} | Sizes Available.`,
-      isAvailable: parseInt(stock) > 0,
-      imageLink: imageUrl
-    };
-
-    // ✅ FIX: Call setProduct directly
-    const result = await setProduct(catalogPayload);
-
-    if (result) {
-      console.log(`✅ Auto-Sync Success: ${name} (Stock: ${stock})`);
-      return res.status(200).json({ message: "Catalog updated" });
-    }
-  } catch (err) {
-    console.error("❌ Sync Error:", err.message);
-    res.status(500).json({ error: err.message });
+// ── Auth middleware ───────────────────────────────────────────────────────────
+function requireAdmin(req, res, next) {
+  const token = req.headers['x-admin-token'] || req.query.token;
+  if (token !== env.admin.secret) {
+    return res.status(401).json({ ok: false, error: 'Unauthorised' });
   }
+  next();
+}
+
+// ── GET /catalog/status ───────────────────────────────────────────────────────
+router.get('/status', requireAdmin, (req, res) => {
+  res.json({
+    ok: true,
+    products: memoryStore.getCatalogSize(),
+    lastSyncAt: memoryStore.getLastSyncAt(),
+  });
 });
 
-module.exports = router;
+// ── POST /catalog/sync ────────────────────────────────────────────────────────
+router.post('/sync', requireAdmin, asyncHandler(async (req, res) => {
+  const products = await fetchAndSyncCatalog();
+  res.json({ ok: true, synced: products.length, at: new Date() });
+}));
+
+// ── GET /catalog/products ─────────────────────────────────────────────────────
+router.get('/products', requireAdmin, (req, res) => {
+  const { brand, category, color, size, inStock } = req.query;
+  let catalog = memoryStore.getCatalog();
+
+  if (brand) catalog = catalog.filter((p) => p.brand?.toLowerCase().includes(brand.toLowerCase()));
+  if (category) catalog = catalog.filter((p) => p.category?.toLowerCase().includes(category.toLowerCase()));
+  if (color) catalog = catalog.filter((p) => p.color?.toLowerCase().includes(color.toLowerCase()));
+  if (size) catalog = catalog.filter((p) => String(p.sizes || '').includes(size));
+  if (inStock === 'true') catalog = catalog.filter((p) => p.inStock);
+
+  res.json({ ok: true, count: catalog.length, products: catalog });
+});
+
+// ── Cron job: auto-sync catalog ───────────────────────────────────────────────
+function startCatalogCron() {
+  const expression = env.catalog.syncCron;
+  if (!cron.validate(expression)) {
+    logger.warn('[CatalogSync] Invalid cron expression – cron disabled', { expression });
+    return;
+  }
+  cron.schedule(expression, async () => {
+    try {
+      await fetchAndSyncCatalog();
+    } catch (err) {
+      logger.error('[CatalogSync] Cron sync failed', { error: err.message });
+    }
+  });
+  logger.info('[CatalogSync] Cron scheduled', { expression });
+}
+
+module.exports = { router, startCatalogCron };

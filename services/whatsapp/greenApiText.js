@@ -1,22 +1,70 @@
-import axios from "axios";
-import { ENV } from "../../config/env.js";
-import { handleError } from "../../errorHandler.js";
+'use strict';
 
-const BASE_URL = `https://api.green-api.com/waInstance${ENV.GREEN_API_ID_INSTANCE}`;
+const { greenApiClient } = require('../../config/api');
+const env = require('../../config/env');
+const { logger } = require('../../errorHandler');
 
-export const sendTextMessage = async (chatId, message) => {
+const TOKEN = env.greenApi.token;
+
+/**
+ * Send a plain text WhatsApp message.
+ * @param {string} chatId  - e.g. "919876543210@c.us"
+ * @param {string} message - text body
+ */
+async function sendText(chatId, message) {
+  if (!message || !chatId) return null;
   try {
-    const url = `${BASE_URL}/sendMessage/${ENV.GREEN_API_API_TOKEN_INSTANCE}`;
-
-    const response = await axios.post(url, {
+    const res = await greenApiClient.post(`/sendMessage/${TOKEN}`, {
       chatId,
-      message,
+      message: String(message).trim(),
     });
-
-    console.log("✅ Message sent:", response.data);
-    return response.data;
-
-  } catch (error) {
-    handleError("WhatsApp Send", error);
+    logger.debug('[GreenAPI] Text sent', { chatId, idMessage: res.data?.idMessage });
+    return res.data;
+  } catch (err) {
+    logger.error('[GreenAPI] sendText failed', { chatId, error: err.message });
+    return null;
   }
-};
+}
+
+/**
+ * Send a text message with a clickable button list (Green API ListMessage).
+ * Falls back to plain text if buttons not supported.
+ */
+async function sendListMessage(chatId, title, body, buttonLabel, sections) {
+  try {
+    const res = await greenApiClient.post(`/sendListMessage/${TOKEN}`, {
+      chatId,
+      message: body,
+      title,
+      footer: 'The Dream Pair',
+      buttonText: buttonLabel,
+      sections,
+    });
+    logger.debug('[GreenAPI] List message sent', { chatId });
+    return res.data;
+  } catch {
+    // Fallback: send as plain text
+    const text = `${title}\n\n${body}`;
+    return sendText(chatId, text);
+  }
+}
+
+/**
+ * Send a template / quick-reply button message.
+ */
+async function sendButtons(chatId, contentText, buttons = []) {
+  try {
+    const res = await greenApiClient.post(`/sendButtons/${TOKEN}`, {
+      chatId,
+      message: contentText,
+      buttons: buttons.map((b, i) => ({ buttonId: String(i + 1), buttonText: b })),
+      footer: 'The Dream Pair',
+    });
+    logger.debug('[GreenAPI] Buttons sent', { chatId });
+    return res.data;
+  } catch {
+    return sendText(chatId, contentText + '\n\n' + buttons.join(' | '));
+  }
+}
+
+module.exports = { sendText, sendListMessage, sendButtons };
