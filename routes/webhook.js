@@ -97,22 +97,41 @@ function parseCartFromText(userText, client) {
 // ── Main webhook handler ───────────────────────────────────────────────────────
 
 router.post('/', asyncHandler(async (req, res) => {
-  // Green API sends updates as POST body
-  const body = req.body;
-
   // Acknowledge immediately to avoid retries
   res.status(200).json({ ok: true });
 
-  // ── Parse incoming message ──
-  const messageData = body?.body;
-  if (!messageData) return;
+  const body = req.body;
 
-  const { senderData, messageData: msgData, typeWebhook } = messageData;
-  if (typeWebhook !== 'incomingMessageReceived') return;
+  // ── Log raw payload in debug mode for troubleshooting ──
+  logger.debug('[Webhook] Raw payload', { body: JSON.stringify(body).slice(0, 500) });
 
-  const chatId = senderData?.chatId;
-  const senderName = senderData?.senderName || '';
-  if (!chatId || chatId.endsWith('@g.us')) return; // skip groups
+  // ── Green API payload can arrive in two shapes:
+  //    Shape A (notification): { body: { typeWebhook, senderData, messageData } }
+  //    Shape B (direct):       { typeWebhook, senderData, messageData }
+  const payload = body?.body || body;
+
+  const typeWebhook = payload?.typeWebhook;
+  const senderData  = payload?.senderData;
+  const msgData     = payload?.messageData;
+
+  if (!typeWebhook) {
+    logger.warn('[Webhook] No typeWebhook in payload');
+    return;
+  }
+
+  if (typeWebhook !== 'incomingMessageReceived') {
+    logger.debug('[Webhook] Ignoring non-message webhook', { typeWebhook });
+    return;
+  }
+
+  const chatId     = senderData?.chatId || senderData?.sender;
+  const senderName = senderData?.senderName || senderData?.pushname || '';
+
+  if (!chatId) {
+    logger.warn('[Webhook] No chatId found', { senderData });
+    return;
+  }
+  if (chatId.endsWith('@g.us')) return; // skip groups
 
   const msgType = msgData?.typeMessage;
   let userText = '';
@@ -122,16 +141,21 @@ router.post('/', asyncHandler(async (req, res) => {
     userText = msgData?.textMessageData?.textMessage || '';
   } else if (msgType === 'imageMessage') {
     userText = msgData?.imageMessageData?.caption || 'I sent you an image';
-    imageUrl = msgData?.imageMessageData?.jpegThumbnail || msgData?.imageMessageData?.downloadUrl || null;
+    imageUrl = msgData?.imageMessageData?.downloadUrl || msgData?.imageMessageData?.jpegThumbnail || null;
   } else if (msgType === 'extendedTextMessage') {
     userText = msgData?.extendedTextMessageData?.text || '';
+  } else if (msgType === 'quotedMessage') {
+    userText = msgData?.extendedTextMessageData?.text || msgData?.textMessageData?.textMessage || '';
   } else {
-    // Unsupported message type
+    logger.debug('[Webhook] Unsupported message type', { msgType });
     await sendText(chatId, "Hey! I can understand text and images 😊 How can I help you find the perfect pair?");
     return;
   }
 
-  if (!userText && !imageUrl) return;
+  if (!userText && !imageUrl) {
+    logger.warn('[Webhook] Empty message after parsing', { msgType });
+    return;
+  }
 
   logger.info('[Webhook] Message received', { chatId, msgType, preview: userText.slice(0, 60) });
 
