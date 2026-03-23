@@ -11,15 +11,27 @@ const VISION_MODEL = 'meta-llama/llama-4-scout-17b-16e-instruct';
  * Download image from any URL into memory and convert to base64.
  * This bypasses Green API URL access restrictions.
  */
+function detectMimeType(buffer) {
+  const hex = buffer.slice(0, 4).toString('hex');
+  if (hex.startsWith('ffd8ff'))   return 'image/jpeg';
+  if (hex.startsWith('89504e47')) return 'image/png';
+  if (hex.startsWith('47494638')) return 'image/gif';
+  if (hex.startsWith('52494646')) return 'image/webp';
+  return 'image/jpeg';
+}
+
 async function downloadImageAsBase64(imageUrl) {
   const response = await axios({
     url: imageUrl,
     method: 'GET',
     responseType: 'arraybuffer',
     timeout: 15000,
+    headers: { 'User-Agent': 'Mozilla/5.0' },
   });
-  const base64 = Buffer.from(response.data, 'binary').toString('base64');
-  return `data:image/jpeg;base64,${base64}`;
+  const buffer = Buffer.from(response.data);
+  const mime   = detectMimeType(buffer);
+  const base64 = buffer.toString('base64');
+  return `data:${mime};base64,${base64}`;
 }
 
 /**
