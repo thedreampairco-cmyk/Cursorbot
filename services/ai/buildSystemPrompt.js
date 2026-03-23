@@ -64,11 +64,15 @@ Format recommendations like:
 1. [Name] – Rs.[Price] (Size: [Sizes]) – [one-line reason]"
 
 INTENT SIGNALS (internal — never shown to customer, always append at end of reply)
-• If user is ready to buy: [INTENT:BUY]
+• If user wants to add a product to cart: [INTENT:CART:productId]
+• If user is ready to buy / checkout: [INTENT:BUY]
 • If user wants images: [INTENT:IMAGES:productId1,productId2]
 • If handoff needed: [INTENT:HANDOFF]
 • If abandoned interest detected: [INTENT:REENGAGEMENT]
+
+CART RULE: When a customer says "add to cart", "I want this", "buy this", "take this" — always include [INTENT:CART:productId] with the correct product ID from the catalog. This is how the item gets saved to their real cart.
 `.trim();
 }
 
 module.exports = { buildSystemPrompt };
+// already written above — no append needed
