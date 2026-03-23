@@ -5,7 +5,7 @@ const env = require('./config/env');
 
 // ── Logger ────────────────────────────────────────────────────────────────────
 const logger = winston.createLogger({
-  level: env.isProd ? 'info' : 'debug',
+  level: process.env.LOG_LEVEL || (env.isProd ? 'info' : 'debug'),
   format: winston.format.combine(
     winston.format.timestamp(),
     winston.format.errors({ stack: true }),
