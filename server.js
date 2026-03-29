@@ -1,110 +1,136 @@
-'use strict';
+/**
+ * server.js  —  Dream Pair Maya Backend
+ *
+ * Boot order:
+ *   1. Env validation
+ *   2. MongoDB connection
+ *   3. Express middleware
+ *   4. Route mounting
+ *   5. Cron jobs
+ *   6. HTTP server start
+ */
 
-// Load env first – before any other module reads process.env
-const env = require('./config/env');
+require("dotenv").config();
 
-const express = require('express');
-const mongoose = require('mongoose');
-const helmet = require('helmet');
-const morgan = require('morgan');
-const rateLimit = require('express-rate-limit');
+const express      = require("express");
+const helmet       = require("helmet");
+const morgan       = require("morgan");
+const rateLimit    = require("express-rate-limit");
+const mongoose     = require("mongoose");
 
-const { errorMiddleware, logger } = require('./errorHandler');
-const webhookRouter = require('./routes/webhook');
-const { router: catalogRouter, startCatalogCron } = require('./routes/catalogSync');
-const { router: adminRouter, startMarketingCrons } = require('./routes/masterAdmin');
-const { fetchAndSyncCatalog } = require('./services/data/googleSheetsFetch');
+// ─── Routes ──────────────────────────────────────────────────────────────────
+const paymentWebhookRouter = require("./routes/webhooks");
+const orderNotifyRouter    = require("./routes/orderNotifications");
 
-// ── App ───────────────────────────────────────────────────────────────────────
-const app = express();
+// ─── Controllers (used by bot middleware, exported for testing) ───────────────
+const orderController = require("./controllers/orderController");
 
-// Security
-app.use(helmet());
-app.set('trust proxy', 1);
+// ─── Cron Jobs ───────────────────────────────────────────────────────────────
+// Import triggers the scheduler — keep this after DB connection
+let cronStarted = false;
 
-// Logging
-app.use(morgan(env.isProd ? 'combined' : 'dev'));
+// ─── Env Validation ───────────────────────────────────────────────────────────
+const REQUIRED_ENV = [
+  "MONGODB_URI",
+  "RAZORPAY_KEY_ID",
+  "RAZORPAY_KEY_SECRET",
+  "RAZORPAY_WEBHOOK_SECRET",
+  "GREEN_API_INSTANCE_ID",
+  "GREEN_API_TOKEN",
+  "GOOGLE_SHEET_ID",
+  "GOOGLE_SA_KEY",
+  "BASE_URL",
+  "SENDGRID_API_KEY",
+  "SLACK_WEBHOOK_URL",
+  "ORDER_WEBHOOK_SECRET",
+];
 
-// Body parsing
-app.use(express.json({ limit: '1mb' }));
-app.use(express.urlencoded({ extended: true, limit: '1mb' }));
-
-// Rate limiting – 300 req/min per IP (webhook)
-const limiter = rateLimit({
-  windowMs: 60_000,
-  max: 300,
-  standardHeaders: true,
-  legacyHeaders: false,
-  message: { ok: false, error: 'Too many requests' },
-});
-app.use(limiter);
-
-// ── Routes ────────────────────────────────────────────────────────────────────
-app.get('/health', (req, res) => res.json({ ok: true, service: 'maya', timestamp: new Date() }));
-
-app.use('/webhook', webhookRouter);
-app.use('/catalog', catalogRouter);
-app.use('/admin', adminRouter);
-
-// 404
-app.use((req, res) => res.status(404).json({ ok: false, error: 'Not found' }));
-
-// Global error handler
-app.use(errorMiddleware);
-
-// ── Bootstrap ──────────────────────────────────────────────────────────────────
-async function bootstrap() {
-  // 1. Connect to MongoDB
-  logger.info('[Boot] Connecting to MongoDB…');
-  await mongoose.connect(env.mongo.uri, {
-    serverSelectionTimeoutMS: 10_000,
-    socketTimeoutMS: 45_000,
-  });
-  logger.info('[Boot] MongoDB connected');
-
-  // 2. Load catalog from Google Sheets
-  logger.info('[Boot] Loading initial catalog from Google Sheets…');
-  try {
-    await fetchAndSyncCatalog();
-  } catch (err) {
-    logger.warn('[Boot] Initial catalog sync failed – will retry on cron', { error: err.message });
-  }
-
-  // 3. Start background jobs
-  startCatalogCron();
-  startMarketingCrons();
-
-  // 4. Start HTTP server
-  const server = app.listen(env.port, () => {
-    logger.info(`[Boot] Maya is live on port ${env.port} (${env.nodeEnv})`);
-  });
-
-  // Graceful shutdown
-  const shutdown = async (signal) => {
-    logger.info(`[Boot] ${signal} received – shutting down gracefully`);
-    server.close(async () => {
-      await mongoose.disconnect();
-      logger.info('[Boot] Shutdown complete');
-      process.exit(0);
-    });
-    setTimeout(() => process.exit(1), 15_000);
-  };
-
-  process.on('SIGTERM', () => shutdown('SIGTERM'));
-  process.on('SIGINT', () => shutdown('SIGINT'));
-
-  process.on('unhandledRejection', (reason) => {
-    logger.error('[Boot] Unhandled rejection', { reason });
-  });
-  process.on('uncaughtException', (err) => {
-    logger.error('[Boot] Uncaught exception', { error: err.message, stack: err.stack });
-    process.exit(1);
-  });
+const missing = REQUIRED_ENV.filter((k) => !process.env[k]);
+if (missing.length) {
+  console.error("❌ Missing required environment variables:", missing.join(", "));
+  process.exit(1);
 }
 
-bootstrap().catch((err) => {
-  console.error('[Boot] Fatal startup error:', err);
-  process.exit(1);
+// ─── App Setup ───────────────────────────────────────────────────────────────
+const app = express();
+
+app.use(helmet());
+app.use(morgan("combined"));
+
+// Global rate limiter (protects all endpoints)
+app.use(
+  rateLimit({
+    windowMs: 15 * 60 * 1000, // 15 min
+    max:      200,
+    standardHeaders: true,
+    legacyHeaders:   false,
+  })
+);
+
+// ─── IMPORTANT: Webhook route uses raw body parser ───────────────────────────
+// Mount BEFORE global json() so HMAC verification has access to raw bytes.
+app.use("/api/webhooks/payment", paymentWebhookRouter);
+
+// Global JSON parser for all other routes
+app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
+
+// ─── Health Check ─────────────────────────────────────────────────────────────
+app.get("/health", (req, res) => {
+  res.json({
+    status:   "ok",
+    service:  "maya-dream-pair",
+    uptime:   process.uptime(),
+    db:       mongoose.connection.readyState === 1 ? "connected" : "disconnected",
+  });
 });
 
-module.exports = app; // for testing
+// ─── Payment Success Redirect (Razorpay callback) ─────────────────────────────
+app.get("/payment/success", (req, res) => {
+  // Razorpay redirects here after hosted-page payment.
+  // The real confirmation comes via webhook; this page is just UX polish.
+  res.send(`
+    <html><body style="font-family:sans-serif;text-align:center;padding:60px">
+      <h2>✅ Payment Received!</h2>
+      <p>Head back to WhatsApp — your size lock confirmation is on its way. 🚀</p>
+    </body></html>
+  `);
+});
+
+// ─── Order notifications (email + admin alert) ───────────────────────────────
+// Uses parsed JSON body — mounted AFTER express.json()
+app.use("/api/webhooks/order", orderNotifyRouter);
+
+// ─── [TODO] Add your Green API / LLM message handler route here ──────────────
+// app.use("/api/messages", require("./routes/messages"));
+
+// ─── MongoDB Connection ────────────────────────────────────────────────────────
+async function startServer() {
+  try {
+    await mongoose.connect(process.env.MONGODB_URI, {
+      serverSelectionTimeoutMS: 5000,
+    });
+    console.log("✅ MongoDB connected");
+
+    // Start cron jobs only after DB is ready
+    if (!cronStarted) {
+      require("./jobs/tokenExpiryJob");
+      cronStarted = true;
+    }
+
+    const PORT = process.env.PORT || 3000;
+    app.listen(PORT, () => {
+      console.log(`🚀 Maya server running on port ${PORT}`);
+      console.log(`   Webhook endpoint: POST /api/webhooks/payment`);
+      console.log(`   Webhook endpoint: POST /api/webhooks/order`);
+      console.log(`   Health check:     GET  /health`);
+    });
+  } catch (err) {
+    console.error("❌ Failed to start server:", err);
+    process.exit(1);
+  }
+}
+
+startServer();
+
+module.exports = { app, orderController }; // exported for tests
