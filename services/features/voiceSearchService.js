@@ -1,56 +1,33 @@
 /**
  * ============================================================
- *  voiceSearchService.js
- *  Drop into: services/features/voiceSearchService.js
+ *  services/features/voiceSearchService.js
+ *  Voice search pipeline for Maya WhatsApp Bot
  * ============================================================
  *
- *  DEPENDENCIES (all already in your package.json):
- *    - axios       → download audio from Green API
- *    - groq-sdk    → Whisper transcription
- *    - winston     → structured logging (uses your existing logger)
+ *  FLOW:
+ *    1. Download OGG audio from Green API CDN (axios, in-memory)
+ *    2. Transcribe via Groq Whisper (whisper-large-v3)
+ *    3. Pass transcribed text to processTextWithAI() in webhook.js
+ *       via the shared helper below
  *
- *  ENV VARS REQUIRED (add to your .env file):
- *    GROQ_API_KEY=<your_groq_cloud_api_key>          ← INSERT HERE
- *    GREEN_API_MEDIA_TOKEN=<your_green_api_token>    ← INSERT HERE (if your
- *                                                        media URLs are token-gated)
+ *  SERVICE PATHS (verified against your actual file tree):
+ *    ../whatsapp/greenApiText  → sendText(waId, text)
+ *    ../aiResponse             → getAIResponse(text)
+ *    ../../models/Client       → conversation history
+ *    ../../errorHandler        → logger
  *
- *  USAGE:
- *    import { handleIncomingAudio } from './voiceSearchService.js';
- *
- *    // Inside your Green API webhook handler, when messageType === 'audioMessage':
- *    const audioUrl = body.messageData.fileMessageData.downloadUrl;
- *    await handleIncomingAudio(audioUrl, userPhone);
+ *  ENV VARS:
+ *    GROQ_API_KEY  ← already in your .env
  * ============================================================
  */
 
 'use strict';
 
-const axios       = require('axios');
-const Groq        = require('groq-sdk');
-const { Readable } = require('stream');
-const path        = require('path');
-const winston     = require('winston');
+const axios        = require('axios');
+const Groq         = require('groq-sdk');
+const { logger }   = require('../../errorHandler');
 
-// ─── Logger ──────────────────────────────────────────────────────────────────
-// Reuse your project's existing logger if you export one; otherwise this
-// creates a lightweight local instance.
-const logger = winston.createLogger({
-  level: 'info',
-  format: winston.format.combine(
-    winston.format.timestamp(),
-    winston.format.printf(({ timestamp, level, message, ...meta }) =>
-      `${timestamp} [VoiceSearch] ${level.toUpperCase()}: ${message} ${
-        Object.keys(meta).length ? JSON.stringify(meta) : ''
-      }`
-    )
-  ),
-  transports: [new winston.transports.Console()],
-});
-
-// ─── Groq Client ─────────────────────────────────────────────────────────────
-// Groq SDK automatically picks up process.env.GROQ_API_KEY.
-// If you manage keys differently, replace with: new Groq({ apiKey: 'sk-...' })
-// ✅ FIXED — only initialises when actually needed, dotenv is always ready by then
+// ─── Lazy Groq client (avoids crash if .env not loaded yet at require time) ──
 let _groq = null;
 function getGroqClient() {
   if (!_groq) {
@@ -61,133 +38,96 @@ function getGroqClient() {
   }
   return _groq;
 }
+
+// ─── Services (lazy-loaded to avoid circular require issues) ──────────────────
+// Both of these are loaded on first use, not at module load time.
+function getSendText() {
+  return require('../whatsapp/greenApiText').sendText;
+}
+
+function getAIResponse() {
+  return require('../aiResponse').getAIResponse;
+}
+
+function getClientModel() {
+  return require('../../models/Client');
+}
+
 // ─── Config ──────────────────────────────────────────────────────────────────
 const CONFIG = {
-  /** Whisper model served by Groq */
-  WHISPER_MODEL: 'whisper-large-v3',
-
-  /** Max audio size accepted (25 MB – Groq's hard limit) */
-  MAX_AUDIO_BYTES: 25 * 1024 * 1024,
-
-  /** Axios download timeout in ms */
-  DOWNLOAD_TIMEOUT_MS: 15_000,
-
-  /** Groq transcription timeout in ms */
+  WHISPER_MODEL:            'whisper-large-v3',
+  MAX_AUDIO_BYTES:          25 * 1024 * 1024,   // Groq's 25 MB hard limit
+  DOWNLOAD_TIMEOUT_MS:      15_000,
   TRANSCRIPTION_TIMEOUT_MS: 30_000,
-
-  /** Fallback message sent back to the user on any failure */
+  MAX_HISTORY_TURNS:        10,
   FALLBACK_MESSAGE:
-    "Sorry, I couldn't hear that properly. Can you type it out? 🎙️➡️⌨️",
+    "Sorry, I couldn't hear that properly. Could you type it out? 🎙️➡️⌨️",
 };
 
-// ─── Lazy-import your WhatsApp sender & message processor ────────────────────
-// Adjust these paths to match your actual project layout.
-//
-//   sendWhatsAppMessage(phone, text)  → sends a text reply via Green API
-//   processMessage(text, phone)       → your existing NLP / intent handler
-//
-let sendWhatsAppMessage, processMessage;
-
-try {
-  // ← UPDATE these require paths if your files live elsewhere
-const { getAIResponse }       = require('../aiResponse');          // one level up from services/features/
-const { sendWhatsAppMessage }  = require('../whatsappService');     // same level as aiResponse
-
-// Local processMessage wrapper
-async function processMessage(text, phone) {
-  const reply = await getAIResponse(text);
-  await sendWhatsAppMessage(phone, reply);
-}
-} catch (err) {
-  // During unit testing these modules may not exist yet – that's fine.
-  logger.warn('Could not load peer modules at init time; ensure paths are correct.', {
-    error: err.message,
-  });
-}
-
-// ─── Helpers ─────────────────────────────────────────────────────────────────
+// ═══════════════════════════════════════════════════════════════════════════════
+//  STEP 1 — DOWNLOAD AUDIO
+// ═══════════════════════════════════════════════════════════════════════════════
 
 /**
- * Downloads the audio file from Green API's CDN.
+ * Downloads the OGG audio from Green API's CDN into a Buffer.
+ * Never writes to disk — lives entirely in memory.
  *
- * Green API media URLs are pre-signed and expire after a short window,
- * so we download immediately on receipt.
- *
- * @param {string} audioUrl  - The downloadUrl from Green API's webhook payload
+ * @param {string} audioUrl - downloadUrl from Green API webhook payload
  * @returns {Promise<{ buffer: Buffer, mimeType: string, filename: string }>}
  */
 async function downloadAudioBuffer(audioUrl) {
-  logger.info('Downloading audio from Green API', { url: audioUrl });
+  logger.info('[VoiceSearch] Downloading audio', { url: audioUrl });
 
   const response = await axios.get(audioUrl, {
     responseType: 'arraybuffer',
     timeout: CONFIG.DOWNLOAD_TIMEOUT_MS,
-
-    // ── If your Green API media URLs require authentication, add the token
-    //    as a query param or Authorization header here:
-    //
-    // params: { token: process.env.GREEN_API_MEDIA_TOKEN },   // ← INSERT HERE
-    //
-    // headers: {
-    //   Authorization: `Bearer ${process.env.GREEN_API_MEDIA_TOKEN}`,
-    // },
+    // If your Green API media URLs require a token, uncomment:
+    // params: { token: process.env.GREEN_API_TOKEN },
   });
 
   const buffer = Buffer.from(response.data);
 
-  if (buffer.byteLength === 0) {
-    throw new Error('Downloaded audio buffer is empty.');
-  }
-
+  if (buffer.byteLength === 0) throw new Error('Downloaded audio buffer is empty');
   if (buffer.byteLength > CONFIG.MAX_AUDIO_BYTES) {
-    throw new Error(
-      `Audio file too large: ${buffer.byteLength} bytes (max ${CONFIG.MAX_AUDIO_BYTES}).`
-    );
+    throw new Error(`Audio too large: ${buffer.byteLength} bytes (max ${CONFIG.MAX_AUDIO_BYTES})`);
   }
 
-  // Derive a filename; Groq needs one to detect the codec.
-  // Green API usually serves .ogg; fall back gracefully.
-  const urlPath  = new URL(audioUrl).pathname;
-  const filename = path.basename(urlPath) || 'voice_message.ogg';
+  const { pathname } = new URL(audioUrl);
+  const filename = require('path').basename(pathname) || 'voice_message.ogg';
   const mimeType = response.headers['content-type'] || 'audio/ogg';
 
-  logger.info('Audio downloaded successfully', {
-    bytes: buffer.byteLength,
-    filename,
-    mimeType,
-  });
-
+  logger.info('[VoiceSearch] Audio downloaded', { bytes: buffer.byteLength, filename });
   return { buffer, mimeType, filename };
 }
 
+// ═══════════════════════════════════════════════════════════════════════════════
+//  STEP 2 — TRANSCRIBE
+// ═══════════════════════════════════════════════════════════════════════════════
+
 /**
  * Sends the audio buffer to Groq Whisper for transcription.
- *
- * Groq's Node SDK expects a File-like object. We build one from the raw
- * Buffer so that no temporary file ever touches disk.
+ * Uses Web API File object — no temp files, requires Node >= 18 (your package.json enforces this).
  *
  * @param {Buffer} buffer
  * @param {string} filename
  * @param {string} mimeType
- * @returns {Promise<string>} - The transcribed text
+ * @returns {Promise<string>} - transcribed text
  */
 async function transcribeAudio(buffer, filename, mimeType) {
-  logger.info('Sending audio to Groq Whisper', {
+  logger.info('[VoiceSearch] Sending to Groq Whisper', {
     model: CONFIG.WHISPER_MODEL,
     filename,
   });
 
-  // Convert Buffer → Web API File (supported in Node ≥ 18, which your
-  // package.json already enforces via "engines": { "node": ">=18.0.0" })
   const audioFile = new File([buffer], filename, { type: mimeType });
 
   const transcription = await Promise.race([
-    groq.audio.transcriptions.create({
+    getGroqClient().audio.transcriptions.create({
       file:            audioFile,
       model:           CONFIG.WHISPER_MODEL,
-      response_format: 'json',      // returns { text: "..." }
-      language:        'en',        // ← change or remove for auto-detect
-      temperature:     0,           // deterministic output
+      response_format: 'json',
+      language:        'en',  // change or remove for auto-detect
+      temperature:     0,
     }),
     new Promise((_, reject) =>
       setTimeout(
@@ -198,64 +138,98 @@ async function transcribeAudio(buffer, filename, mimeType) {
   ]);
 
   const text = transcription?.text?.trim();
+  if (!text) throw new Error('Groq returned an empty transcription');
 
-  if (!text) {
-    throw new Error('Groq returned an empty transcription.');
-  }
-
-  logger.info('Transcription successful', { text });
+  logger.info('[VoiceSearch] Transcription successful', { text });
   return text;
 }
 
-// ─── Main Export ─────────────────────────────────────────────────────────────
+// ═══════════════════════════════════════════════════════════════════════════════
+//  STEP 3 — PROCESS TRANSCRIBED TEXT WITH AI + SEND REPLY
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/**
+ * Processes the transcribed text through Maya's AI, maintaining conversation
+ * history in the Client model just like a typed message would.
+ *
+ * @param {string} text        - transcribed voice text
+ * @param {string} senderPhone - Green API waId
+ */
+async function processVoiceText(text, senderPhone) {
+  const sendText    = getSendText();
+  const getAI       = getAIResponse();
+  const Client      = getClientModel();
+
+  // Load or create conversation
+  let client = await Client.findOne({ waId: senderPhone });
+  if (!client) client = new Client({ waId: senderPhone });
+
+  client.addMessage('user', `[Voice] ${text}`);
+  client.lastMessageAt = new Date();
+
+  // Build context-aware prompt
+  const recentMessages = client.messages.slice(-(CONFIG.MAX_HISTORY_TURNS * 2));
+  const hasHistory     = recentMessages.length > 1;
+
+  let prompt = text;
+  if (hasHistory) {
+    const historyText = recentMessages
+      .slice(0, -1)
+      .map((m) => `${m.role === 'user' ? 'Customer' : 'Maya'}: ${m.content}`)
+      .join('\n');
+    prompt = `Previous conversation:\n${historyText}\n\nCustomer (via voice): ${text}`;
+  }
+
+  const aiReply = await getAI(prompt);
+
+  client.addMessage('assistant', aiReply);
+  await client.save();
+
+  await sendText(senderPhone, aiReply);
+
+  logger.info('[VoiceSearch] Reply sent', {
+    senderPhone,
+    replyPreview: aiReply.slice(0, 80),
+  });
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//  MAIN EXPORT
+// ═══════════════════════════════════════════════════════════════════════════════
 
 /**
  * handleIncomingAudio
- * ───────────────────
- * Orchestrates the full voice-to-intent pipeline:
- *   1. Download OGG audio from Green API CDN
- *   2. Transcribe via Groq Whisper
- *   3. Pipe the transcribed text into processMessage()
+ * ────────────────────
+ * Entry point called by routes/webhook.js for AudioMessage / PTTMessage.
+ * Orchestrates: download → transcribe → AI → send reply
+ * On any failure: sends the fallback message to the user.
  *
- * On any failure the user receives the friendly fallback message.
- *
- * @param {string} audioUrl   - downloadUrl from Green API webhook payload
- * @param {string} userPhone  - E.164 phone number, e.g. "919876543210"
- * @returns {Promise<void>}
+ * @param {string} audioUrl    - downloadUrl from Green API webhook payload
+ * @param {string} senderPhone - Green API waId e.g. "919876543210@c.us"
  */
-async function handleIncomingAudio(audioUrl, userPhone) {
-  logger.info('handleIncomingAudio invoked', { userPhone });
+async function handleIncomingAudio(audioUrl, senderPhone) {
+  logger.info('[VoiceSearch] Pipeline started', { senderPhone });
 
   try {
-    // ── Step 1: Download ──────────────────────────────────────────────────
     const { buffer, mimeType, filename } = await downloadAudioBuffer(audioUrl);
+    const transcribedText                = await transcribeAudio(buffer, filename, mimeType);
 
-    // ── Step 2: Transcribe ────────────────────────────────────────────────
-    const transcribedText = await transcribeAudio(buffer, filename, mimeType);
-
-    // ── Step 3: Process (hand off to your existing pipeline) ─────────────
-    logger.info('Routing transcription to processMessage', {
-      userPhone,
-      transcribedText,
-    });
-
-    await processMessage(transcribedText, userPhone);
+    logger.info('[VoiceSearch] Passing to AI', { senderPhone, transcribedText });
+    await processVoiceText(transcribedText, senderPhone);
 
   } catch (err) {
-    // ── Graceful fallback ─────────────────────────────────────────────────
-    logger.error('Voice search pipeline failed – sending fallback', {
-      userPhone,
-      error:  err.message,
-      stack:  err.stack,
+    logger.error('[VoiceSearch] Pipeline failed — sending fallback', {
+      senderPhone,
+      error: err.message,
+      stack: err.stack,
     });
 
     try {
-      await sendWhatsAppMessage(userPhone, CONFIG.FALLBACK_MESSAGE);
+      const sendText = getSendText();
+      await sendText(senderPhone, CONFIG.FALLBACK_MESSAGE);
     } catch (sendErr) {
-      // If even the fallback send fails, log and swallow so we don't crash
-      // the webhook handler.
-      logger.error('Failed to send fallback message', {
-        userPhone,
+      logger.error('[VoiceSearch] Fallback send also failed', {
+        senderPhone,
         error: sendErr.message,
       });
     }

@@ -1,175 +1,99 @@
 /**
  * ============================================================
- *  webhook.js  —  Green API + Razorpay Unified Webhook Router
- *  Place at: routes/webhook.js
- *
- *  Mount in server.js:
- *    const webhookRouter = require('./routes/webhook');
- *    app.use('/webhook', webhookRouter);
+ *  routes/webhook.js  —  Green API Inbound Message Router
+ *  The Dream Pair / Maya Bot
  * ============================================================
  *
- *  HANDLES:
- *    ✅  TextMessage / ExtendedTextMessage  → processMessage()
- *    ✅  ImageMessage                       → caption → processMessage()
- *    ✅  AudioMessage / PTTMessage          → Groq Whisper → processMessage()
- *    ✅  Razorpay payment callbacks         → handlePaymentCallback()
- *    ✅  outgoingMessageStatus              → delivery receipts (logged only)
- *    ✅  stateInstanceChanged               → instance health (logged only)
- *    ⚠️  ReactionMessage                   → silently acknowledged
- *    ❌  Everything else                    → "not supported" reply sent to user
+ *  WHAT THIS FILE DOES:
+ *    1. Receives ALL inbound Green API webhook notifications
+ *    2. Passes every message through the anti-fraud shield first
+ *       (COD deposit, live-location verify, unboxing contract)
+ *    3. If fraud shield doesn't claim it → routes to Maya AI handler
+ *    4. Maintains per-user conversation history (Client model)
  *
- *  ENV VARS — add all of these to your .env:
- *    GREEN_API_WEBHOOK_TOKEN=<secret_set_in_green_api_console>   ← INSERT
- *    RAZORPAY_WEBHOOK_SECRET=<secret_set_in_razorpay_dashboard>  ← INSERT
- *    RAZORPAY_KEY_ID=<your_razorpay_key_id>                      ← INSERT
- *    RAZORPAY_KEY_SECRET=<your_razorpay_key_secret>              ← INSERT
+ *  MESSAGE TYPE ROUTING:
+ *    TextMessage / ExtendedTextMessage  → fraud check → AI reply
+ *    AudioMessage / PTTMessage          → Groq Whisper → fraud check → AI reply
+ *    ImageMessage                       → vision analysis → AI reply
+ *    LocationMessage                    → fraud shield (live-location verify)
+ *    VideoMessage                       → fraud shield (unboxing video)
+ *    ReactionMessage                    → silently acknowledged
+ *    Everything else                    → "not supported" reply
+ *
+ *  SERVICE PATHS (verified against your real file tree):
+ *    services/whatsapp/greenApiText.js     → sendText(waId, text)
+ *    services/aiResponse.js                → getAIResponse(text)
+ *    services/features/voiceSearchService  → handleIncomingAudio(url, phone)
+ *    services/features/visionRecognition   → getVisionAnalysis(url)
+ *    fraud/index.js                        → onIncomingWhatsAppMessage(msg)
+ *    models/Client.js                      → conversation history
+ *    errorHandler.js                       → logger
  * ============================================================
  */
 
 'use strict';
 
 const express = require('express');
-const crypto  = require('crypto');  // built-in Node — no install needed
-const winston = require('winston');
+const router  = express.Router();
 
-const router = express.Router();
+// ─── Services (all paths verified against your actual file tree) ──────────────
+const { sendText }                  = require('../services/whatsapp/greenApiText');
+const { getAIResponse }             = require('../services/aiResponse');
+const { handleIncomingAudio }       = require('../services/features/voiceSearchService');
+const { onIncomingWhatsAppMessage } = require('../fraud');
+const Client                        = require('../models/Client');
+const { logger }                    = require('../errorHandler');
 
-// ─── Internal services ───────────────────────────────────────────────────────
-// ← UPDATE these three require paths if your folder layout differs
-const { handleIncomingAudio } = require('../services/features/voiceSearchService');
-const { getAIResponse }      = require('../services/aiResponse');      // ← Groq AI
-const { sendWhatsAppMessage } = require('../services/whatsappService'); // ← update path if needed
-// Combines AI response + WhatsApp reply into one call
-// Drop-in replacement for processMessage(text, phone)
-async function processMessage(text, phone) {
-  const reply = await getAIResponse(text);
-  await sendWhatsAppMessage(phone, reply);
+// Vision is optional — degrades to caption-only if unavailable
+let getVisionAnalysis = null;
+try {
+  ({ getVisionAnalysis } = require('../services/features/visionRecognition'));
+} catch {
+  logger.warn('[Webhook] visionRecognition not available — image captions only');
 }
 
-// ─── Logger ──────────────────────────────────────────────────────────────────
-const logger = winston.createLogger({
-  level: process.env.LOG_LEVEL || 'info',
-  format: winston.format.combine(
-    winston.format.timestamp(),
-    winston.format.printf(({ timestamp, level, message, ...meta }) =>
-      `${timestamp} [Webhook] ${level.toUpperCase()}: ${message} ${
-        Object.keys(meta).length ? JSON.stringify(meta) : ''
-      }`
-    )
-  ),
-  transports: [new winston.transports.Console()],
-});
-
-// ─── User-facing reply strings ────────────────────────────────────────────────
+// ─── Constants ────────────────────────────────────────────────────────────────
 const REPLIES = {
-  UNSUPPORTED_TYPE:
-    "Sorry, I can only handle text messages, voice notes 🎙️, and images 📸. " +
+  UNSUPPORTED:
+    "Sorry, I can only handle text messages, voice notes 🎙️, and images 📸.\n" +
     "Please type your question or record a voice message!",
 
   IMAGE_NO_CAPTION:
-    "Great image! 📸 To search our catalogue, please type what you're looking for " +
-    "or add a caption to your image — e.g. *'Do you have this in size 10?'*",
+    "Great image! 📸 To search our catalogue, please describe what you're " +
+    "looking for or add a caption — e.g. *'Do you have this in size 10?'*",
 
-  AUDIO_NO_URL:
-    "Sorry, I couldn't access that voice message. Please try again. 🎙️",
-
-  PAYMENT_CONFIRMED: (orderId) =>
-    `✅ Payment confirmed for order *${orderId}*! ` +
-    `We're preparing your sneakers and will update you once dispatched. 👟`,
-
-  PAYMENT_FAILED: (orderId) =>
-    `❌ Payment failed for order *${orderId}*. ` +
-    `Please retry or contact us if the issue persists.`,
-
-  PAYMENT_REFUNDED: (orderId) =>
-    `💸 Your refund for order *${orderId}* has been initiated. ` +
-    `It typically reflects in 5–7 business days.`,
+  ERROR:
+    "Something went wrong on my end. Please try again in a moment 🙏",
 };
 
+// Recent turns to include in AI context window
+const MAX_HISTORY_TURNS = 10;
+
 // ═══════════════════════════════════════════════════════════════════════════════
-//  SECTION 1: MIDDLEWARE & GUARDS
+//  SECTION 1 — WEBHOOK TOKEN GUARD
 // ═══════════════════════════════════════════════════════════════════════════════
 
-/**
- * Verifies the optional Green API webhook token.
- * Set GREEN_API_WEBHOOK_TOKEN in your .env and in the Green API console under
- * Settings → Webhooks → Webhook Token.
- * If the env var is absent (e.g. local dev), the check is bypassed.
- */
 function verifyGreenApiToken(req, res, next) {
-  const secret = process.env.GREEN_API_WEBHOOK_TOKEN; // ← INSERT in .env
-  if (!secret) return next();
+  const secret = process.env.GREEN_API_WEBHOOK_TOKEN;
+  if (!secret) return next(); // bypassed in dev if not set
 
   const incoming = req.query.token || req.headers['x-green-api-token'];
   if (incoming !== secret) {
-    logger.warn('Rejected Green API webhook — invalid token', { ip: req.ip });
+    logger.warn('[Webhook] Rejected — invalid token', { ip: req.ip });
     return res.status(401).json({ error: 'Unauthorized' });
   }
   next();
 }
 
-/**
- * Verifies Razorpay's HMAC-SHA256 webhook signature.
- *
- * IMPORTANT: This middleware must receive the RAW request body (Buffer),
- * not the parsed JSON. In server.js, register the raw body parser on this
- * route BEFORE express.json(), like so:
- *
- *   app.use('/webhook/payment', express.raw({ type: 'application/json' }));
- *   app.use('/webhook',         express.json());
- *   app.use('/webhook',         webhookRouter);
- *
- * Razorpay docs: https://razorpay.com/docs/webhooks/validate-test/
- */
-function verifyRazorpaySignature(req, res, next) {
-  const secret    = process.env.RAZORPAY_WEBHOOK_SECRET; // ← INSERT in .env
-  const signature = req.headers['x-razorpay-signature'];
+// ═══════════════════════════════════════════════════════════════════════════════
+//  SECTION 2 — HELPERS
+// ═══════════════════════════════════════════════════════════════════════════════
 
-  if (!secret) {
-    logger.warn('RAZORPAY_WEBHOOK_SECRET not set — skipping signature check');
-    return next();
-  }
-
-  if (!signature) {
-    logger.warn('Razorpay webhook received without signature header', { ip: req.ip });
-    return res.status(400).json({ error: 'Missing signature' });
-  }
-
-  try {
-    // Razorpay signs the raw body bytes — req.body must still be a Buffer here
-    const rawBody = Buffer.isBuffer(req.body)
-      ? req.body
-      : Buffer.from(JSON.stringify(req.body));
-
-    const expectedSig = crypto
-      .createHmac('sha256', secret)
-      .update(rawBody)
-      .digest('hex');
-
-    const signaturesMatch = crypto.timingSafeEqual(
-      Buffer.from(expectedSig, 'hex'),
-      Buffer.from(signature,    'hex')
-    );
-
-    if (!signaturesMatch) {
-      logger.warn('Razorpay webhook signature mismatch', { ip: req.ip });
-      return res.status(401).json({ error: 'Invalid signature' });
-    }
-
-    // Re-parse body as JSON now that we've verified the raw bytes
-    req.body = JSON.parse(rawBody.toString());
-    next();
-  } catch (err) {
-    logger.error('Error verifying Razorpay signature', { error: err.message });
-    return res.status(400).json({ error: 'Signature verification failed' });
-  }
+function extractSenderPhone(body) {
+  return body?.senderData?.sender ?? null;
 }
 
-/**
- * Returns true when a notification is about a message THIS bot sent.
- * Must guard against these to prevent infinite reply loops.
- */
-function isOutgoingMessage(body) {
+function isOutgoing(body) {
   return (
     body?.typeWebhook === 'outgoingAPIMessageReceived' ||
     body?.senderData?.sender === body?.instanceData?.wid
@@ -177,249 +101,234 @@ function isOutgoingMessage(body) {
 }
 
 /**
- * Extracts the normalised sender phone from any Green API notification.
- * Individual chats:  "919876543210@c.us"
- * Group chats:       "120363XXXXXXXX@g.us"
+ * Normalises a Green API body into the shape fraud/index.js expects:
+ *   { from, type, text: { body }, location: { latitude, longitude }, video: { id } }
  */
-function extractSenderPhone(body) {
-  return body?.senderData?.sender ?? null;
+function normaliseForFraud(body) {
+  const senderPhone = extractSenderPhone(body);
+  const msgData     = body?.messageData;
+  const type        = msgData?.typeMessage;
+  const base        = { from: senderPhone };
+
+  switch (type) {
+    case 'TextMessage':
+    case 'ExtendedTextMessage': {
+      const textBody =
+        msgData?.textMessageData?.textMessage ||
+        msgData?.extendedTextMessageData?.text || '';
+      return { ...base, type: 'text', text: { body: textBody } };
+    }
+    case 'LocationMessage': {
+      const loc = msgData?.locationMessageData;
+      return {
+        ...base,
+        type: 'location',
+        location: { latitude: loc?.latitude, longitude: loc?.longitude },
+      };
+    }
+    case 'VideoMessage': {
+      return {
+        ...base,
+        type: 'video',
+        video: { id: msgData?.fileMessageData?.downloadUrl },
+      };
+    }
+    default:
+      return { ...base, type: type?.toLowerCase() || 'unknown' };
+  }
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-//  SECTION 2: MESSAGE-TYPE HANDLERS
+//  SECTION 3 — CORE AI HANDLER
 // ═══════════════════════════════════════════════════════════════════════════════
 
 /**
- * TextMessage + ExtendedTextMessage (quoted replies, URL previews).
- * Both types carry the user intent in the same location in the payload.
+ * processTextWithAI
+ * ──────────────────
+ * 1. Load/create Client (MongoDB conversation history)
+ * 2. Add user message to history
+ * 3. Build context-aware prompt from recent turns
+ * 4. Get AI reply from Groq
+ * 5. Save AI reply to history
+ * 6. Send reply via Green API
+ *
+ * @param {string} userText    - text to process (typed or transcribed voice)
+ * @param {string} senderPhone - Green API waId e.g. "919876543210@c.us"
  */
-async function handleTextMessage(messageData, senderPhone) {
+async function processTextWithAI(userText, senderPhone) {
+  logger.info('[Webhook] Processing with AI', {
+    senderPhone,
+    preview: userText.slice(0, 80),
+  });
+
+  // ── Load or create Client ─────────────────────────────────────────────────
+  let client = await Client.findOne({ waId: senderPhone });
+  if (!client) {
+    client = new Client({ waId: senderPhone });
+  }
+
+  // ── Add user message ──────────────────────────────────────────────────────
+  client.addMessage('user', userText);
+  client.lastMessageAt = new Date();
+
+  // ── Build context-aware prompt ────────────────────────────────────────────
+  // Include last N turns so Maya remembers the conversation
+  const recentMessages = client.messages.slice(-(MAX_HISTORY_TURNS * 2));
+  const hasHistory = recentMessages.length > 1;
+
+  let prompt = userText;
+  if (hasHistory) {
+    const historyText = recentMessages
+      .slice(0, -1) // exclude the message we just added
+      .map((m) => `${m.role === 'user' ? 'Customer' : 'Maya'}: ${m.content}`)
+      .join('\n');
+    prompt = `Previous conversation:\n${historyText}\n\nCustomer: ${userText}`;
+  }
+
+  // ── Get AI response ───────────────────────────────────────────────────────
+  const aiReply = await getAIResponse(prompt);
+
+  // ── Save to history and persist ───────────────────────────────────────────
+  client.addMessage('assistant', aiReply);
+  await client.save();
+
+  // ── Send reply via Green API ──────────────────────────────────────────────
+  await sendText(senderPhone, aiReply);
+
+  logger.info('[Webhook] AI reply sent', {
+    senderPhone,
+    replyPreview: aiReply.slice(0, 80),
+  });
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//  SECTION 4 — MESSAGE TYPE HANDLERS
+// ═══════════════════════════════════════════════════════════════════════════════
+
+async function handleTextMessage(messageData, senderPhone, body) {
   const text =
-    messageData?.textMessageData?.textMessage ||      // plain TextMessage
-    messageData?.extendedTextMessageData?.text ||     // quoted / URL preview
-    '';
+    messageData?.textMessageData?.textMessage ||
+    messageData?.extendedTextMessageData?.text || '';
 
   if (!text.trim()) {
-    logger.warn('Text message arrived with empty body', { senderPhone });
+    logger.warn('[Webhook] Empty text body', { senderPhone });
     return;
   }
 
-  logger.info('Text message received', { senderPhone, text });
-  await processMessage(text.trim(), senderPhone);
+  // Fraud shield gets first look at every text message
+  const fraudResult = await onIncomingWhatsAppMessage(normaliseForFraud(body));
+  if (fraudResult !== null) {
+    logger.info('[Webhook] Fraud shield handled message', { senderPhone });
+    return;
+  }
+
+  // Not fraud-related → Maya handles it
+  await processTextWithAI(text.trim(), senderPhone);
 }
 
-/**
- * AudioMessage (received from WhatsApp Web / mobile) and
- * PTTMessage    (Push-To-Talk — recorded inside WhatsApp, typically shorter).
- * Both are .ogg files; voiceSearchService handles either transparently.
- */
 async function handleAudioMessage(messageData, senderPhone) {
   const downloadUrl = messageData?.fileMessageData?.downloadUrl;
 
   if (!downloadUrl) {
-    logger.error('AudioMessage arrived without a downloadUrl', { senderPhone });
-    await sendWhatsAppMessage(senderPhone, REPLIES.AUDIO_NO_URL);
+    logger.error('[Webhook] AudioMessage missing downloadUrl', { senderPhone });
+    await sendText(senderPhone, "Sorry, I couldn't access that voice message. Please try again 🎙️");
     return;
   }
 
-  logger.info('Audio message received — handing off to voiceSearchService', {
-    senderPhone,
-    downloadUrl,
-  });
+  logger.info('[Webhook] Audio → voiceSearchService', { senderPhone });
 
-  // voiceSearchService owns all error handling + fallback messaging for audio
+  // voiceSearchService transcribes → calls processTextWithAI → sends reply
+  // It also handles its own error fallback message
   await handleIncomingAudio(downloadUrl, senderPhone);
 }
 
-/**
- * ImageMessage — if the user attached a caption we treat it as a search query.
- * No caption → prompt them to add one or type their question.
- *
- * Extend this with vision/OCR later if you want reverse sneaker lookup.
- */
 async function handleImageMessage(messageData, senderPhone) {
-  const caption = messageData?.fileMessageData?.caption?.trim() || '';
+  const downloadUrl = messageData?.fileMessageData?.downloadUrl;
+  const caption     = messageData?.fileMessageData?.caption?.trim() || '';
 
-  logger.info('Image message received', { senderPhone, hasCaption: !!caption });
+  logger.info('[Webhook] Image received', {
+    senderPhone,
+    hasCaption: !!caption,
+    hasVision: !!getVisionAnalysis,
+  });
 
+  // Option A: Vision AI available — analyse the image
+  if (getVisionAnalysis && downloadUrl) {
+    try {
+      const description = await getVisionAnalysis(downloadUrl);
+      const prompt = caption
+        ? `Image analysis: "${description}". Customer caption: "${caption}". Help find this product.`
+        : `Image analysis: "${description}". Help the customer find this or a similar product.`;
+      await processTextWithAI(prompt, senderPhone);
+      return;
+    } catch (err) {
+      logger.warn('[Webhook] Vision failed — falling back to caption', { error: err.message });
+    }
+  }
+
+  // Option B: Caption provided
   if (caption) {
-    logger.info('Processing image caption as search query', { senderPhone, caption });
-    await processMessage(caption, senderPhone);
-  } else {
-    await sendWhatsAppMessage(senderPhone, REPLIES.IMAGE_NO_CAPTION);
+    await processTextWithAI(caption, senderPhone);
+    return;
   }
+
+  // Option C: Nothing to work with
+  await sendText(senderPhone, REPLIES.IMAGE_NO_CAPTION);
+}
+
+async function handleLocationMessage(body, senderPhone) {
+  logger.info('[Webhook] Location → fraud shield', { senderPhone });
+  await onIncomingWhatsAppMessage(normaliseForFraud(body));
+}
+
+async function handleVideoMessage(body, senderPhone) {
+  logger.info('[Webhook] Video → fraud shield (unboxing)', { senderPhone });
+  await onIncomingWhatsAppMessage(normaliseForFraud(body));
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-//  SECTION 3: PAYMENT CALLBACK HANDLER
+//  SECTION 5 — MAIN ROUTE
 // ═══════════════════════════════════════════════════════════════════════════════
 
-/**
- * Handles all Razorpay webhook events sent to POST /webhook/payment.
- *
- * Supported events:
- *   payment.captured  → notify buyer, mark order paid in DB
- *   payment.failed    → notify buyer, optionally trigger retry flow
- *   refund.created    → notify buyer of refund
- *
- * The buyer's WhatsApp number must be saved as a note on the Razorpay order
- * at checkout time. Save it under notes.whatsapp_number when creating the
- * order via the Razorpay SDK, e.g.:
- *
- *   razorpay.orders.create({
- *     amount,
- *     currency: 'INR',
- *     notes: { whatsapp_number: '919876543210@c.us' }  ← INSERT AT CHECKOUT
- *   });
- *
- * Razorpay event reference:
- *   https://razorpay.com/docs/webhooks/payloads/payments/
- */
-async function handlePaymentCallback(body) {
-  const event   = body?.event;
-  const payload = body?.payload;
-
-  logger.info('Razorpay webhook event received', { event });
-
-  // ← Adjust this path to match where YOUR checkout saves the phone number
-  const senderPhone =
-    payload?.payment?.entity?.notes?.whatsapp_number ||
-    payload?.order?.entity?.notes?.whatsapp_number ||
-    null;
-
-  const orderId =
-    payload?.payment?.entity?.order_id ||
-    payload?.order?.entity?.id ||
-    'N/A';
-
-  const paymentId = payload?.payment?.entity?.id || 'N/A';
-
-  switch (event) {
-
-    case 'payment.captured': {
-      logger.info('Payment captured', { orderId, paymentId, senderPhone });
-
-      // ── TODO: persist to DB ───────────────────────────────────────────────
-      // await Order.findOneAndUpdate(
-      //   { razorpayOrderId: orderId },
-      //   { status: 'paid', razorpayPaymentId: paymentId }
-      // );
-
-      if (senderPhone) {
-        await sendWhatsAppMessage(senderPhone, REPLIES.PAYMENT_CONFIRMED(orderId));
-      } else {
-        logger.warn('payment.captured — could not resolve senderPhone', { orderId });
-      }
-      break;
-    }
-
-    case 'payment.failed': {
-      const errorDesc =
-        payload?.payment?.entity?.error_description || 'Unknown error';
-
-      logger.warn('Payment failed', { orderId, paymentId, errorDesc, senderPhone });
-
-      // ── TODO: persist to DB ───────────────────────────────────────────────
-      // await Order.findOneAndUpdate(
-      //   { razorpayOrderId: orderId },
-      //   { status: 'failed' }
-      // );
-
-      if (senderPhone) {
-        await sendWhatsAppMessage(senderPhone, REPLIES.PAYMENT_FAILED(orderId));
-      }
-      break;
-    }
-
-    case 'refund.created': {
-      const refundId = payload?.refund?.entity?.id || 'N/A';
-      logger.info('Refund created', { orderId, refundId, senderPhone });
-
-      if (senderPhone) {
-        await sendWhatsAppMessage(senderPhone, REPLIES.PAYMENT_REFUNDED(orderId));
-      }
-      break;
-    }
-
-    default:
-      // Razorpay sends many event types (subscription.*, invoice.*, etc.).
-      // Always 200 so Razorpay doesn't retry endlessly.
-      logger.info('Unhandled Razorpay event — acknowledged without action', { event });
-  }
-}
-
-// ═══════════════════════════════════════════════════════════════════════════════
-//  SECTION 4: ROUTES
-// ═══════════════════════════════════════════════════════════════════════════════
-
-// ── POST /webhook/payment — Razorpay callbacks ────────────────────────────────
-//
-// express.raw() for this route MUST be registered in server.js before
-// express.json() (see verifyRazorpaySignature comment block above).
-router.post('/payment', verifyRazorpaySignature, async (req, res) => {
-
-  // Acknowledge immediately — Razorpay retries on any non-2xx response
-  res.status(200).json({ status: 'received' });
-
-  try {
-    await handlePaymentCallback(req.body);
-  } catch (err) {
-    logger.error('Unhandled error in payment callback', {
-      error: err.message,
-      stack: err.stack,
-    });
-  }
-});
-
-// ── POST /webhook — Green API inbound messages ────────────────────────────────
 router.post('/', verifyGreenApiToken, async (req, res) => {
 
-  // Acknowledge immediately — Green API expects 200 within 5 s or it retries,
-  // causing duplicate message processing
+  // ACK immediately — Green API retries if no 200 within 5 s
   res.status(200).json({ status: 'received' });
 
   const body = req.body;
 
   if (!body || typeof body !== 'object') {
-    logger.warn('Malformed webhook payload — not an object');
+    logger.warn('[Webhook] Malformed payload — not an object');
     return;
   }
 
   const typeWebhook = body.typeWebhook;
 
-  logger.info('Green API notification received', {
+  logger.info('[Webhook] Notification received', {
     typeWebhook,
     instanceId: body.instanceData?.idInstance,
   });
 
-  // ── Non-message notification types ───────────────────────────────────────
+  // System events — log only
   if (typeWebhook === 'outgoingMessageStatus') {
-    logger.info('Delivery receipt', {
-      idMessage: body.idMessage,
-      status:    body.status,
-    });
+    logger.info('[Webhook] Delivery receipt', { idMessage: body.idMessage, status: body.status });
     return;
   }
-
   if (typeWebhook === 'stateInstanceChanged') {
-    logger.info('Instance state changed', { state: body.stateInstance });
+    logger.info('[Webhook] Instance state', { state: body.stateInstance });
+    return;
+  }
+  if (typeWebhook === 'deviceInfo') return;
+
+  // Skip messages we sent (loop guard)
+  if (isOutgoing(body)) {
+    logger.info('[Webhook] Skipping outgoing message');
     return;
   }
 
-  if (typeWebhook === 'deviceInfo') {
-    logger.info('Device info ping received');
-    return;
-  }
-
-  // ── Ignore messages sent by the bot itself to prevent reply loops ─────────
-  if (isOutgoingMessage(body)) {
-    logger.info('Skipping outgoing message notification');
-    return;
-  }
-
-  // ── Only continue for inbound messages ───────────────────────────────────
+  // Only process inbound messages
   if (typeWebhook !== 'incomingMessageReceived') {
-    logger.info('Ignoring unrecognised typeWebhook', { typeWebhook });
+    logger.info('[Webhook] Ignoring typeWebhook', { typeWebhook });
     return;
   }
 
@@ -428,65 +337,61 @@ router.post('/', verifyGreenApiToken, async (req, res) => {
   const typeMessage = messageData?.typeMessage;
 
   if (!senderPhone || !typeMessage) {
-    logger.error('Missing senderPhone or typeMessage in payload', { body });
+    logger.error('[Webhook] Missing senderPhone or typeMessage', { body });
     return;
   }
 
-  logger.info('Routing inbound message', { senderPhone, typeMessage });
+  logger.info('[Webhook] Routing', { senderPhone, typeMessage });
 
   try {
     switch (typeMessage) {
-
-      // ── Text ──────────────────────────────────────────────────────────────
       case 'TextMessage':
       case 'ExtendedTextMessage':
-        await handleTextMessage(messageData, senderPhone);
+        await handleTextMessage(messageData, senderPhone, body);
         break;
 
-      // ── Voice ─────────────────────────────────────────────────────────────
       case 'AudioMessage':
       case 'PTTMessage':
         await handleAudioMessage(messageData, senderPhone);
         break;
 
-      // ── Image ─────────────────────────────────────────────────────────────
       case 'ImageMessage':
         await handleImageMessage(messageData, senderPhone);
         break;
 
-      // ── Reactions — acknowledged silently, no reply ───────────────────────
-      case 'ReactionMessage':
-        logger.info('Emoji reaction received — no action taken', { senderPhone });
+      case 'LocationMessage':
+        await handleLocationMessage(body, senderPhone);
         break;
 
-      // ── Everything else: sticker, video, document, contact, location, etc. ─
-      //    Per your requirement: always send the "not supported" reply
+      case 'VideoMessage':
+        await handleVideoMessage(body, senderPhone);
+        break;
+
+      case 'ReactionMessage':
+        logger.info('[Webhook] Reaction — no action', { senderPhone });
+        break;
+
       default:
-        logger.info('Unsupported message type — sending not-supported reply', {
-          senderPhone,
-          typeMessage,
-        });
-        await sendWhatsAppMessage(senderPhone, REPLIES.UNSUPPORTED_TYPE);
+        logger.info('[Webhook] Unsupported type — sending reply', { senderPhone, typeMessage });
+        await sendText(senderPhone, REPLIES.UNSUPPORTED);
         break;
     }
   } catch (err) {
-    logger.error('Unhandled error in message routing', {
+    logger.error('[Webhook] Routing error', {
       senderPhone,
       typeMessage,
       error: err.message,
       stack: err.stack,
     });
+    try {
+      await sendText(senderPhone, REPLIES.ERROR);
+    } catch { /* swallow */ }
   }
 });
 
-// ── GET /webhook/health — uptime / load-balancer probe ───────────────────────
+// Health check
 router.get('/health', (_req, res) => {
-  res.json({
-    status:    'ok',
-    service:   'webhook',
-    uptime:    process.uptime(),
-    timestamp: new Date().toISOString(),
-  });
+  res.json({ status: 'ok', service: 'green-api-webhook', uptime: process.uptime() });
 });
 
 module.exports = router;
