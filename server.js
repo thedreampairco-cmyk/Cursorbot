@@ -43,6 +43,9 @@ if (missing.length) {
 // ─── App Setup ───────────────────────────────────────────────────────────────
 const app = express();
 
+// Add this line to fix the Render proxy error
+app.set('trust proxy', 1); 
+
 app.use(helmet());
 app.use(morgan("combined"));
 
@@ -56,6 +59,15 @@ app.use(
 );
 
 // ─── Raw body routes BEFORE express.json() ───────────────────────────────────
+
+app.set('trust proxy', 1);
+
+// Add this line to parse incoming Green API JSON payloads
+app.use(express.json());
+
+// Your routes must come AFTER the body parser
+
+
 app.use("/api/webhooks/payment",  paymentWebhookRouter);
 app.use("/api/webhooks/greenapi", greenApiRouter);
 
