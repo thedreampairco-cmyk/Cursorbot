@@ -1,493 +1,492 @@
+/**
+ * ============================================================
+ *  webhook.js  —  Green API + Razorpay Unified Webhook Router
+ *  Place at: routes/webhook.js
+ *
+ *  Mount in server.js:
+ *    const webhookRouter = require('./routes/webhook');
+ *    app.use('/webhook', webhookRouter);
+ * ============================================================
+ *
+ *  HANDLES:
+ *    ✅  TextMessage / ExtendedTextMessage  → processMessage()
+ *    ✅  ImageMessage                       → caption → processMessage()
+ *    ✅  AudioMessage / PTTMessage          → Groq Whisper → processMessage()
+ *    ✅  Razorpay payment callbacks         → handlePaymentCallback()
+ *    ✅  outgoingMessageStatus              → delivery receipts (logged only)
+ *    ✅  stateInstanceChanged               → instance health (logged only)
+ *    ⚠️  ReactionMessage                   → silently acknowledged
+ *    ❌  Everything else                    → "not supported" reply sent to user
+ *
+ *  ENV VARS — add all of these to your .env:
+ *    GREEN_API_WEBHOOK_TOKEN=<secret_set_in_green_api_console>   ← INSERT
+ *    RAZORPAY_WEBHOOK_SECRET=<secret_set_in_razorpay_dashboard>  ← INSERT
+ *    RAZORPAY_KEY_ID=<your_razorpay_key_id>                      ← INSERT
+ *    RAZORPAY_KEY_SECRET=<your_razorpay_key_secret>              ← INSERT
+ * ============================================================
+ */
+
 'use strict';
 
 const express = require('express');
+const crypto  = require('crypto');  // built-in Node — no install needed
+const winston = require('winston');
+
 const router = express.Router();
-const { asyncHandler, logger } = require('../errorHandler');
-const db = require('../services/data/databaseService');
-const { processMessage } = require('../services/ai/aiIntegration');
-const { sendText, sendButtons } = require('../services/whatsapp/greenApiText');
-const { sendProductImages } = require('../services/whatsapp/greenApiMedia');
-const { matchSneakerFromImage, findMatchesByDescription } = require('../services/features/visionRecognition');
-const { reduceStock, checkAvailability } = require('../services/features/inventoryService');
-const { placeOrder } = require('../services/data/orderStore');
-const memoryStore = require('../services/data/memoryStore');
-const env = require('../config/env');
 
-// ── Helpers ───────────────────────────────────────────────────────────────────
-function needsHandoff(text) {
-  return env.handoff.triggerKeywords.some((kw) => text.toLowerCase().includes(kw));
+// ─── Internal services ───────────────────────────────────────────────────────
+// ← UPDATE these three require paths if your folder layout differs
+const { handleIncomingAudio } = require('../services/features/voiceSearchService');
+const { getAIResponse }      = require('../services/aiResponse');      // ← Groq AI
+const { sendWhatsAppMessage } = require('../services/whatsappService'); // ← update path if needed
+// Combines AI response + WhatsApp reply into one call
+// Drop-in replacement for processMessage(text, phone)
+async function processMessage(text, phone) {
+  const reply = await getAIResponse(text);
+  await sendWhatsAppMessage(phone, reply);
 }
 
-function isAddToCart(text) {
-  return /add\s*(to\s*)?cart|add\s*this|i('ll)?\s*take\s*(this|it)|buy\s*this|want\s*this|order\s*this|yes\s*add|add\s*it/i.test(text);
-}
+// ─── Logger ──────────────────────────────────────────────────────────────────
+const logger = winston.createLogger({
+  level: process.env.LOG_LEVEL || 'info',
+  format: winston.format.combine(
+    winston.format.timestamp(),
+    winston.format.printf(({ timestamp, level, message, ...meta }) =>
+      `${timestamp} [Webhook] ${level.toUpperCase()}: ${message} ${
+        Object.keys(meta).length ? JSON.stringify(meta) : ''
+      }`
+    )
+  ),
+  transports: [new winston.transports.Console()],
+});
 
-function isCheckout(text) {
-  return /^checkout$|place\s*order|confirm\s*order|buy\s*now|proceed\s*to\s*pay|i want to order|place my order/i.test(text.trim());
-}
+// ─── User-facing reply strings ────────────────────────────────────────────────
+const REPLIES = {
+  UNSUPPORTED_TYPE:
+    "Sorry, I can only handle text messages, voice notes 🎙️, and images 📸. " +
+    "Please type your question or record a voice message!",
 
-function isViewCart(text) {
-  return /^(my\s+)?cart$|^view\s+cart$|show.*cart|what.*in.*cart|my.*cart/i.test(text.trim());
-}
+  IMAGE_NO_CAPTION:
+    "Great image! 📸 To search our catalogue, please type what you're looking for " +
+    "or add a caption to your image — e.g. *'Do you have this in size 10?'*",
 
-function formatCart(cart) {
-  if (!cart || !cart.length) return '(empty)';
-  const lines = cart.map((i, idx) => `${idx + 1}. ${i.productName} x${i.quantity} – Rs.${i.price}`);
-  const total = cart.reduce((s, i) => s + i.price * (i.quantity || 1), 0);
-  return lines.join('\n') + `\n\nTotal: Rs.${total.toLocaleString('en-IN')}`;
-}
+  AUDIO_NO_URL:
+    "Sorry, I couldn't access that voice message. Please try again. 🎙️",
 
-function addToCart(client, product) {
-  if (!Array.isArray(client.cart)) client.cart = [];
-  const pid = String(product.productId || product.id);
-  const existing = client.cart.find((i) => i.productId === pid);
-  if (existing) {
-    existing.quantity = (existing.quantity || 1) + 1;
-  } else {
-    client.cart.push({
-      productId: pid,
-      productName: product.productName || product.name,
-      price: product.price,
-      quantity: 1,
-      imageUrl: product.imageUrl || null,
-    });
+  PAYMENT_CONFIRMED: (orderId) =>
+    `✅ Payment confirmed for order *${orderId}*! ` +
+    `We're preparing your sneakers and will update you once dispatched. 👟`,
+
+  PAYMENT_FAILED: (orderId) =>
+    `❌ Payment failed for order *${orderId}*. ` +
+    `Please retry or contact us if the issue persists.`,
+
+  PAYMENT_REFUNDED: (orderId) =>
+    `💸 Your refund for order *${orderId}* has been initiated. ` +
+    `It typically reflects in 5–7 business days.`,
+};
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//  SECTION 1: MIDDLEWARE & GUARDS
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/**
+ * Verifies the optional Green API webhook token.
+ * Set GREEN_API_WEBHOOK_TOKEN in your .env and in the Green API console under
+ * Settings → Webhooks → Webhook Token.
+ * If the env var is absent (e.g. local dev), the check is bypassed.
+ */
+function verifyGreenApiToken(req, res, next) {
+  const secret = process.env.GREEN_API_WEBHOOK_TOKEN; // ← INSERT in .env
+  if (!secret) return next();
+
+  const incoming = req.query.token || req.headers['x-green-api-token'];
+  if (incoming !== secret) {
+    logger.warn('Rejected Green API webhook — invalid token', { ip: req.ip });
+    return res.status(401).json({ error: 'Unauthorized' });
   }
-  client.lastCartActivity = new Date();
-  client.cartAbandoned = false;
-  client.markModified('cart');
+  next();
 }
 
-function updatePreferences(client, userText) {
-  const lower = userText.toLowerCase();
-  const brands = ['nike','adidas','puma','new balance','reebok','jordan','converse','vans','skechers','asics','onitsuka'];
-  const colors = ['black','white','red','blue','green','grey','gray','pink','yellow','brown'];
-  brands.forEach((b) => {
-    if (lower.includes(b) && !client.preferences.brand?.includes(b))
-      client.preferences.brand = [...(client.preferences.brand || []), b];
+/**
+ * Verifies Razorpay's HMAC-SHA256 webhook signature.
+ *
+ * IMPORTANT: This middleware must receive the RAW request body (Buffer),
+ * not the parsed JSON. In server.js, register the raw body parser on this
+ * route BEFORE express.json(), like so:
+ *
+ *   app.use('/webhook/payment', express.raw({ type: 'application/json' }));
+ *   app.use('/webhook',         express.json());
+ *   app.use('/webhook',         webhookRouter);
+ *
+ * Razorpay docs: https://razorpay.com/docs/webhooks/validate-test/
+ */
+function verifyRazorpaySignature(req, res, next) {
+  const secret    = process.env.RAZORPAY_WEBHOOK_SECRET; // ← INSERT in .env
+  const signature = req.headers['x-razorpay-signature'];
+
+  if (!secret) {
+    logger.warn('RAZORPAY_WEBHOOK_SECRET not set — skipping signature check');
+    return next();
+  }
+
+  if (!signature) {
+    logger.warn('Razorpay webhook received without signature header', { ip: req.ip });
+    return res.status(400).json({ error: 'Missing signature' });
+  }
+
+  try {
+    // Razorpay signs the raw body bytes — req.body must still be a Buffer here
+    const rawBody = Buffer.isBuffer(req.body)
+      ? req.body
+      : Buffer.from(JSON.stringify(req.body));
+
+    const expectedSig = crypto
+      .createHmac('sha256', secret)
+      .update(rawBody)
+      .digest('hex');
+
+    const signaturesMatch = crypto.timingSafeEqual(
+      Buffer.from(expectedSig, 'hex'),
+      Buffer.from(signature,    'hex')
+    );
+
+    if (!signaturesMatch) {
+      logger.warn('Razorpay webhook signature mismatch', { ip: req.ip });
+      return res.status(401).json({ error: 'Invalid signature' });
+    }
+
+    // Re-parse body as JSON now that we've verified the raw bytes
+    req.body = JSON.parse(rawBody.toString());
+    next();
+  } catch (err) {
+    logger.error('Error verifying Razorpay signature', { error: err.message });
+    return res.status(400).json({ error: 'Signature verification failed' });
+  }
+}
+
+/**
+ * Returns true when a notification is about a message THIS bot sent.
+ * Must guard against these to prevent infinite reply loops.
+ */
+function isOutgoingMessage(body) {
+  return (
+    body?.typeWebhook === 'outgoingAPIMessageReceived' ||
+    body?.senderData?.sender === body?.instanceData?.wid
+  );
+}
+
+/**
+ * Extracts the normalised sender phone from any Green API notification.
+ * Individual chats:  "919876543210@c.us"
+ * Group chats:       "120363XXXXXXXX@g.us"
+ */
+function extractSenderPhone(body) {
+  return body?.senderData?.sender ?? null;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//  SECTION 2: MESSAGE-TYPE HANDLERS
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/**
+ * TextMessage + ExtendedTextMessage (quoted replies, URL previews).
+ * Both types carry the user intent in the same location in the payload.
+ */
+async function handleTextMessage(messageData, senderPhone) {
+  const text =
+    messageData?.textMessageData?.textMessage ||      // plain TextMessage
+    messageData?.extendedTextMessageData?.text ||     // quoted / URL preview
+    '';
+
+  if (!text.trim()) {
+    logger.warn('Text message arrived with empty body', { senderPhone });
+    return;
+  }
+
+  logger.info('Text message received', { senderPhone, text });
+  await processMessage(text.trim(), senderPhone);
+}
+
+/**
+ * AudioMessage (received from WhatsApp Web / mobile) and
+ * PTTMessage    (Push-To-Talk — recorded inside WhatsApp, typically shorter).
+ * Both are .ogg files; voiceSearchService handles either transparently.
+ */
+async function handleAudioMessage(messageData, senderPhone) {
+  const downloadUrl = messageData?.fileMessageData?.downloadUrl;
+
+  if (!downloadUrl) {
+    logger.error('AudioMessage arrived without a downloadUrl', { senderPhone });
+    await sendWhatsAppMessage(senderPhone, REPLIES.AUDIO_NO_URL);
+    return;
+  }
+
+  logger.info('Audio message received — handing off to voiceSearchService', {
+    senderPhone,
+    downloadUrl,
   });
-  colors.forEach((c) => {
-    if (lower.includes(c) && !client.preferences.color?.includes(c))
-      client.preferences.color = [...(client.preferences.color || []), c];
-  });
-  const sm = userText.match(/(?:size|uk|us|eu)?\s*(\d{1,2}(?:\.\d)?)/i);
-  if (sm && !client.preferences.size?.includes(sm[1]))
-    client.preferences.size = [...(client.preferences.size || []), sm[1]];
-  const bm = userText.match(/(?:under|below|budget|max|upto|up to)\s*(?:rs\.?|inr)?\s*(\d+)/i);
-  if (bm) client.preferences.priceMax = parseInt(bm[1], 10);
+
+  // voiceSearchService owns all error handling + fallback messaging for audio
+  await handleIncomingAudio(downloadUrl, senderPhone);
 }
 
-async function scoreActivity(waId, intents, userText) {
-  let delta = 1;
-  if (intents.wantsBuy) delta += 5;
-  if (intents.wantsImages?.length) delta += 2;
-  if (/price|cost|how much|rs\.?/i.test(userText)) delta += 2;
-  if (/buy|order|checkout|purchase/i.test(userText)) delta += 4;
-  await db.incrementLeadScore(waId, delta);
-}
+/**
+ * ImageMessage — if the user attached a caption we treat it as a search query.
+ * No caption → prompt them to add one or type their question.
+ *
+ * Extend this with vision/OCR later if you want reverse sneaker lookup.
+ */
+async function handleImageMessage(messageData, senderPhone) {
+  const caption = messageData?.fileMessageData?.caption?.trim() || '';
 
-async function updateSegment(client) {
-  if (client.segment === 'customer') return;
-  if (client.leadScore >= 15) client.segment = 'hot';
-  else if (client.leadScore >= 5) client.segment = 'warm';
-  else client.segment = 'new';
-}
+  logger.info('Image message received', { senderPhone, hasCaption: !!caption });
 
-// ── CHECKOUT FLOW ─────────────────────────────────────────────────────────────
-async function handleCheckoutFlow(chatId, client, userText) {
-  const session = client.checkoutSession;
-
-  // ── Start checkout ──
-  if (!session) {
-    const cart = client.cart || [];
-    if (!cart.length) {
-      await sendText(chatId, "Your cart is empty! 🛒 Browse our catalog and add something you love 😊");
-      return true;
-    }
-    const { ok, outOfStock } = checkAvailability(
-      cart.map((i) => ({ productId: i.productId, quantity: i.quantity || 1 }))
-    );
-    if (!ok) {
-      await sendText(chatId, `Sorry, some items are out of stock: ${outOfStock.join(', ')}. Please clear your cart and try again.`);
-      return true;
-    }
-
-    client.checkoutSession = { step: 'size', cart };
-    client.markModified('checkoutSession');
-    await db.saveClient(client);
-
-    await sendText(chatId,
-      `Great! Let's place your order 🛍️\n\n` +
-      `Your cart:\n${formatCart(cart)}\n\n` +
-      `*Step 1 of 4* — What *shoe size* would you like?\n` +
-      `_(e.g. UK 8, US 9, EU 42)_`
-    );
-    return true;
-  }
-
-  // ── Step 1: Size ──
-  if (session.step === 'size') {
-    const size = userText.trim();
-    if (!size) { await sendText(chatId, "Please enter your shoe size (e.g. UK 8) 👟"); return true; }
-    session.size = size;
-    session.step = 'name';
-    session.cart = session.cart.map((i) => ({ ...i, size }));
-    client.checkoutSession = session;
-    client.markModified('checkoutSession');
-    await db.saveClient(client);
-    await sendText(chatId, `Size *${size}* ✅\n\n*Step 2 of 4* — What is your *full name*?`);
-    return true;
-  }
-
-  // ── Step 2: Name ──
-  if (session.step === 'name') {
-    const name = userText.trim();
-    if (name.length < 2) { await sendText(chatId, "Please enter your full name 😊"); return true; }
-    session.name = name;
-    session.step = 'phone';
-    client.name = name;
-    client.checkoutSession = session;
-    client.markModified('checkoutSession');
-    await db.saveClient(client);
-    await sendText(chatId, `Nice to meet you, *${name}*! 👋\n\n*Step 3 of 4* — What is your *phone number*?\n_(10-digit mobile number)_`);
-    return true;
-  }
-
-  // ── Step 3: Phone ──
-  if (session.step === 'phone') {
-    const digits = userText.replace(/\D/g, '');
-    if (digits.length < 10) { await sendText(chatId, "Please enter a valid 10-digit phone number 📱"); return true; }
-    session.phone = digits;
-    session.step = 'address';
-    client.checkoutSession = session;
-    client.markModified('checkoutSession');
-    await db.saveClient(client);
-    await sendText(chatId,
-      `*Step 4 of 4* — What is your *delivery address*?\n\n` +
-      `_Include: House/Flat no, Street, City, State, Pincode_\n` +
-      `Example: 42 MG Road, Bangalore, Karnataka, 560001`
-    );
-    return true;
-  }
-
-  // ── Step 4: Address ──
-  if (session.step === 'address') {
-    const address = userText.trim();
-    if (address.length < 10) { await sendText(chatId, "Please enter your complete address with city and pincode 📍"); return true; }
-    session.address = address;
-    session.step = 'confirm';
-    client.checkoutSession = session;
-    client.markModified('checkoutSession');
-    await db.saveClient(client);
-
-    const cartText = session.cart.map((i, idx) =>
-      `${idx + 1}. ${i.productName} (Size: ${session.size}) x${i.quantity || 1} – Rs.${i.price}`
-    ).join('\n');
-    const total = session.cart.reduce((s, i) => s + i.price * (i.quantity || 1), 0);
-
-    await sendText(chatId,
-      `📋 *Order Summary*\n\n` +
-      `👟 *Items:*\n${cartText}\n\n` +
-      `💰 *Total: Rs.${total.toLocaleString('en-IN')}*\n\n` +
-      `👤 Name: ${session.name}\n` +
-      `📱 Phone: ${session.phone}\n` +
-      `📍 Address: ${session.address}\n\n` +
-      `Reply *CONFIRM* to place your order\n` +
-      `Reply *CANCEL* to cancel`
-    );
-    return true;
-  }
-
-  // ── Step 5: Confirm / Cancel ──
-  if (session.step === 'confirm') {
-    if (/^cancel$/i.test(userText.trim())) {
-      client.checkoutSession = null;
-      client.markModified('checkoutSession');
-      await db.saveClient(client);
-      await sendText(chatId, "Order cancelled. Your cart is still saved — reply *checkout* anytime to try again! 😊");
-      return true;
-    }
-    if (!/^confirm$/i.test(userText.trim())) {
-      await sendText(chatId, "Please reply *CONFIRM* to place your order or *CANCEL* to cancel 😊");
-      return true;
-    }
-
-    // Place the order
-    const pincodeMatch = session.address.match(/\b(\d{6})\b/);
-    const shippingAddress = {
-      line1: session.address,
-      pincode: pincodeMatch ? pincodeMatch[1] : '',
-    };
-
-    const { order, paymentLink, totalAmount } = await placeOrder({
-      waId: chatId,
-      customerName: session.name,
-      items: session.cart,
-      shippingAddress,
-      notes: `Phone: ${session.phone}`,
-    });
-
-    reduceStock(session.cart.map((i) => ({ productId: i.productId, quantity: i.quantity || 1 })));
-
-    client.cart = [];
-    client.checkoutSession = null;
-    client.segment = 'customer';
-    client.markModified('cart');
-    client.markModified('checkoutSession');
-    client.addMessage('user', 'CONFIRM');
-    client.addMessage('assistant', `Order placed: ${order.orderId}`);
-    await db.saveClient(client);
-
-    let msg =
-      `✅ *Order Confirmed!*\n\n` +
-      `📦 Order ID: *${order.orderId}*\n` +
-      `💰 Total: *Rs.${totalAmount.toLocaleString('en-IN')}*\n\n`;
-    msg += paymentLink
-      ? `💳 *Pay here:*\n${paymentLink}\n\n`
-      : `💳 *Payment:*\nPlease transfer Rs.${totalAmount} via UPI and share the screenshot here.\n\n`;
-    msg += `📍 Delivering to: ${session.address}\n\n`;
-    msg += `We'll send tracking details once shipped! 🚚\nThank you for shopping with The Dream Pair! 👟✨`;
-
-    await sendText(chatId, msg);
-    return true;
-  }
-
-  return false;
-}
-
-// ── MAIN WEBHOOK ──────────────────────────────────────────────────────────────
-router.post('/', asyncHandler(async (req, res) => {
-  res.status(200).json({ ok: true });
-
-  const body    = req.body;
-  const payload = body?.body || body;
-
-  const typeWebhook = payload?.typeWebhook;
-  const senderData  = payload?.senderData;
-  const msgData     = payload?.messageData;
-
-  if (!typeWebhook || typeWebhook !== 'incomingMessageReceived') return;
-
-  const chatId     = senderData?.chatId || senderData?.sender;
-  const senderName = senderData?.senderName || senderData?.pushname || '';
-
-  if (!chatId || chatId.endsWith('@g.us')) return;
-
-  const msgType = msgData?.typeMessage;
-  let userText  = "";
-  let imageUrl  = null;
-  let isImage   = false;
-  let jpegThumb = null;
-  let idMessage = null;
-
-  if (msgType === "textMessage") {
-    userText = msgData?.textMessageData?.textMessage || "";
-  } else if (msgType === "imageMessage") {
-    isImage  = true;
-    userText = msgData?.imageMessageData?.caption || "";
-
-    // Extract all possible image fields from Green API payload
-    const imgData = msgData?.imageMessageData || {};
-
-    // Green API sometimes puts URL directly in imageMessageData
-    imageUrl = imgData.downloadUrl
-            || imgData.url
-            || imgData.fileUrl
-            || imgData.mediaUrl
-            || imgData.linkToFile
-            || imgData.urlFile
-            || null;
-
-    // jpegThumbnail is base64 — always present as fallback
-    jpegThumb = imgData.jpegThumbnail || null;
-
-    // idMessage can be at root payload level or inside msgData
-    idMessage = payload?.idMessage || msgData?.idMessage || null;
-
-    // Image URL fetching is handled inside visionRecognition.matchSneakerFromImage
-
-    logger.info("[Webhook] Image received", {
-      chatId,
-      hasUrl: !!imageUrl,
-      hasThumb: !!jpegThumb,
-      idMessage,
-      imageDataKeys: Object.keys(imgData),
-      RAW: JSON.stringify(imgData).slice(0, 400)
-    });
-  } else if (msgType === "extendedTextMessage") {
-    userText = msgData?.extendedTextMessageData?.text || "";
-  } else if (msgType === "quotedMessage") {
-    userText = msgData?.extendedTextMessageData?.text || msgData?.textMessageData?.textMessage || "";
+  if (caption) {
+    logger.info('Processing image caption as search query', { senderPhone, caption });
+    await processMessage(caption, senderPhone);
   } else {
-    await sendText(chatId, "Hey! I can understand text and images 😊 How can I help you find your perfect pair?");
-    return;
+    await sendWhatsAppMessage(senderPhone, REPLIES.IMAGE_NO_CAPTION);
   }
+}
 
-  if (!userText && !isImage) return;
+// ═══════════════════════════════════════════════════════════════════════════════
+//  SECTION 3: PAYMENT CALLBACK HANDLER
+// ═══════════════════════════════════════════════════════════════════════════════
 
-  logger.info('[Webhook] Message', { chatId, msgType, text: userText.slice(0, 60) });
+/**
+ * Handles all Razorpay webhook events sent to POST /webhook/payment.
+ *
+ * Supported events:
+ *   payment.captured  → notify buyer, mark order paid in DB
+ *   payment.failed    → notify buyer, optionally trigger retry flow
+ *   refund.created    → notify buyer of refund
+ *
+ * The buyer's WhatsApp number must be saved as a note on the Razorpay order
+ * at checkout time. Save it under notes.whatsapp_number when creating the
+ * order via the Razorpay SDK, e.g.:
+ *
+ *   razorpay.orders.create({
+ *     amount,
+ *     currency: 'INR',
+ *     notes: { whatsapp_number: '919876543210@c.us' }  ← INSERT AT CHECKOUT
+ *   });
+ *
+ * Razorpay event reference:
+ *   https://razorpay.com/docs/webhooks/payloads/payments/
+ */
+async function handlePaymentCallback(body) {
+  const event   = body?.event;
+  const payload = body?.payload;
 
-  const client = await db.getOrCreateClient(chatId, senderName);
+  logger.info('Razorpay webhook event received', { event });
 
-  // ── Handoff active ──
-  if (client.handoffActive) {
-    if (env.handoff.agentNumber)
-      await sendText(env.handoff.agentNumber, `[${client.name || chatId}] ${userText}`);
-    return;
-  }
+  // ← Adjust this path to match where YOUR checkout saves the phone number
+  const senderPhone =
+    payload?.payment?.entity?.notes?.whatsapp_number ||
+    payload?.order?.entity?.notes?.whatsapp_number ||
+    null;
 
-  // ── Handoff trigger ──
-  if (needsHandoff(userText)) {
-    client.handoffActive = true;
-    client.addMessage('user', userText);
-    await db.saveClient(client);
-    await sendText(chatId, "Sure! Connecting you with our team right away 🙌 Please hold on.");
-    if (env.handoff.agentNumber)
-      await sendText(env.handoff.agentNumber, `Handoff from ${client.name || chatId}: ${userText}`);
-    return;
-  }
+  const orderId =
+    payload?.payment?.entity?.order_id ||
+    payload?.order?.entity?.id ||
+    'N/A';
 
-  // ── Active checkout session — all messages go to checkout flow ──
-  if (client.checkoutSession) {
-    await handleCheckoutFlow(chatId, client, userText);
-    return;
-  }
+  const paymentId = payload?.payment?.entity?.id || 'N/A';
 
-  // ── Image upload ──
-  if (isImage) {
-    await sendText(chatId, "Ooh, let me analyse that sneaker! 👀🔍");
+  switch (event) {
 
-    const { identified, matches, noUrl } = await matchSneakerFromImage(chatId, idMessage, imageUrl, jpegThumb);
+    case 'payment.captured': {
+      logger.info('Payment captured', { orderId, paymentId, senderPhone });
 
-    if (noUrl) {
-      await sendText(chatId,
-        "I received your image but couldn't process it directly.\n\n" +
-        "Could you tell me the *brand* and *style*? (e.g. Nike Air Max, Adidas Samba)\n" +
-        "I'll find the closest match from our collection! 🔍"
-      );
-    } else if (matches.length) {
-      const intro = identified
-        ? `Looks like a *${identified}*! Here are the closest matches 👟`
-        : "Here are some similar sneakers we carry 👟";
-      await sendText(chatId, intro);
-      await sendProductImages(chatId, matches, 4);
-      const list = matches.map((p, i) => `${i + 1}. ${p.name} – Rs.${p.price}`).join('\n');
-      await sendText(chatId, list + "\n\nWould you like to add any of these to your cart? 🛍️");
-      client.lastMentionedProduct = {
-        productId: String(matches[0].id),
-        productName: matches[0].name,
-        price: matches[0].price,
-        imageUrl: matches[0].imageUrl || null,
-      };
-      client.markModified('lastMentionedProduct');
-    } else {
-      await sendText(chatId,
-        "Hmm, I couldn't find an exact match in our catalog! 😊\n\n" +
-        "Tell me the *brand* or *style* and I'll search for you! 👟"
-      );
-    }
+      // ── TODO: persist to DB ───────────────────────────────────────────────
+      // await Order.findOneAndUpdate(
+      //   { razorpayOrderId: orderId },
+      //   { status: 'paid', razorpayPaymentId: paymentId }
+      // );
 
-    client.addMessage('user', userText || '[image]');
-    client.addMessage('assistant', identified ? `Vision matched: ${identified}` : 'No vision match');
-    await db.saveClient(client);
-    return;
-  }
-
-  updatePreferences(client, userText);
-
-  // ── VIEW CART ──
-  if (isViewCart(userText)) {
-    const cart = client.cart || [];
-    if (!cart.length) {
-      await sendText(chatId, "Your cart is empty! 🛒 Browse our sneakers and add something you love 😊");
-    } else {
-      await sendText(chatId, `Your cart 🛒\n\n${formatCart(cart)}\n\nReply *checkout* to place your order!`);
-    }
-    return;
-  }
-
-  // ── CLEAR CART ──
-  if (/^clear\s+cart$/i.test(userText.trim())) {
-    client.cart = [];
-    client.markModified('cart');
-    await db.saveClient(client);
-    await sendText(chatId, "Cart cleared! 🛒 Start fresh and find your next pair 👟");
-    return;
-  }
-
-  // ── ADD TO CART ──
-  if (isAddToCart(userText)) {
-    const last = client.lastMentionedProduct;
-    if (last) {
-      addToCart(client, last);
-      client.addMessage('user', userText);
-      client.addMessage('assistant', `Added ${last.productName} to cart`);
-      await db.saveClient(client);
-      await sendText(chatId,
-        `Added *${last.productName}* to your cart! 🛒\n\n${formatCart(client.cart)}\n\nReply *checkout* to order or keep browsing!`
-      );
-    } else {
-      await sendText(chatId, "Which sneaker would you like to add? Browse our catalog first and I'll add it for you 😊");
-    }
-    return;
-  }
-
-  // ── CHECKOUT ──
-  if (isCheckout(userText)) {
-    await handleCheckoutFlow(chatId, client, userText);
-    return;
-  }
-
-  // ── ORDER TRACKING ──
-  const trackMatch = userText.match(/(?:track|status|where is|order)\s+(TDP-\S+)/i);
-  if (trackMatch) {
-    const orderId = trackMatch[1].toUpperCase();
-    const order = await db.getOrderById(orderId);
-    if (order) {
-      let msg = `📦 Order *${orderId}*\nStatus: *${order.status}*`;
-      if (order.awbNumber) msg += `\nAWB: ${order.awbNumber} (${order.shippingProvider || 'Courier'})`;
-      await sendText(chatId, msg);
-    } else {
-      await sendText(chatId, `I couldn't find order ${orderId}. Please double-check and try again!`);
-    }
-    return;
-  }
-
-  // ── AI CONVERSATION ──
-  client.addMessage('user', userText);
-  const { reply, intents, products } = await processMessage(client, userText);
-  client.addMessage('assistant', reply);
-
-  // Save last mentioned product to MongoDB
-  if (products.length) {
-    const p = products[0];
-    client.lastMentionedProduct = { productId: String(p.id), productName: p.name, price: p.price, imageUrl: p.imageUrl || null };
-    client.markModified('lastMentionedProduct');
-  } else {
-    // Scan reply text for product names
-    const catalog = memoryStore.getCatalog();
-    for (const p of catalog) {
-      if (reply.toLowerCase().includes(p.name.toLowerCase())) {
-        client.lastMentionedProduct = { productId: String(p.id), productName: p.name, price: p.price, imageUrl: p.imageUrl || null };
-        client.markModified('lastMentionedProduct');
-        break;
+      if (senderPhone) {
+        await sendWhatsAppMessage(senderPhone, REPLIES.PAYMENT_CONFIRMED(orderId));
+      } else {
+        logger.warn('payment.captured — could not resolve senderPhone', { orderId });
       }
+      break;
     }
+
+    case 'payment.failed': {
+      const errorDesc =
+        payload?.payment?.entity?.error_description || 'Unknown error';
+
+      logger.warn('Payment failed', { orderId, paymentId, errorDesc, senderPhone });
+
+      // ── TODO: persist to DB ───────────────────────────────────────────────
+      // await Order.findOneAndUpdate(
+      //   { razorpayOrderId: orderId },
+      //   { status: 'failed' }
+      // );
+
+      if (senderPhone) {
+        await sendWhatsAppMessage(senderPhone, REPLIES.PAYMENT_FAILED(orderId));
+      }
+      break;
+    }
+
+    case 'refund.created': {
+      const refundId = payload?.refund?.entity?.id || 'N/A';
+      logger.info('Refund created', { orderId, refundId, senderPhone });
+
+      if (senderPhone) {
+        await sendWhatsAppMessage(senderPhone, REPLIES.PAYMENT_REFUNDED(orderId));
+      }
+      break;
+    }
+
+    default:
+      // Razorpay sends many event types (subscription.*, invoice.*, etc.).
+      // Always 200 so Razorpay doesn't retry endlessly.
+      logger.info('Unhandled Razorpay event — acknowledged without action', { event });
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//  SECTION 4: ROUTES
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// ── POST /webhook/payment — Razorpay callbacks ────────────────────────────────
+//
+// express.raw() for this route MUST be registered in server.js before
+// express.json() (see verifyRazorpaySignature comment block above).
+router.post('/payment', verifyRazorpaySignature, async (req, res) => {
+
+  // Acknowledge immediately — Razorpay retries on any non-2xx response
+  res.status(200).json({ status: 'received' });
+
+  try {
+    await handlePaymentCallback(req.body);
+  } catch (err) {
+    logger.error('Unhandled error in payment callback', {
+      error: err.message,
+      stack: err.stack,
+    });
+  }
+});
+
+// ── POST /webhook — Green API inbound messages ────────────────────────────────
+router.post('/', verifyGreenApiToken, async (req, res) => {
+
+  // Acknowledge immediately — Green API expects 200 within 5 s or it retries,
+  // causing duplicate message processing
+  res.status(200).json({ status: 'received' });
+
+  const body = req.body;
+
+  if (!body || typeof body !== 'object') {
+    logger.warn('Malformed webhook payload — not an object');
+    return;
   }
 
-  await scoreActivity(chatId, intents, userText);
-  await updateSegment(client);
-  await db.saveClient(client);
+  const typeWebhook = body.typeWebhook;
 
-  await sendText(chatId, reply);
+  logger.info('Green API notification received', {
+    typeWebhook,
+    instanceId: body.instanceData?.idInstance,
+  });
 
-  if (products.length) {
-    await sendProductImages(chatId, products, 5);
-    for (const p of products) await db.recordBrowseEvent(chatId, p);
+  // ── Non-message notification types ───────────────────────────────────────
+  if (typeWebhook === 'outgoingMessageStatus') {
+    logger.info('Delivery receipt', {
+      idMessage: body.idMessage,
+      status:    body.status,
+    });
+    return;
   }
 
-  if (intents.wantsBuy && client.cart?.length) {
-    await sendButtons(chatId, 'Ready to grab these? 🛒', ['Checkout', 'Keep Browsing', 'Talk to Team']);
+  if (typeWebhook === 'stateInstanceChanged') {
+    logger.info('Instance state changed', { state: body.stateInstance });
+    return;
   }
-}));
+
+  if (typeWebhook === 'deviceInfo') {
+    logger.info('Device info ping received');
+    return;
+  }
+
+  // ── Ignore messages sent by the bot itself to prevent reply loops ─────────
+  if (isOutgoingMessage(body)) {
+    logger.info('Skipping outgoing message notification');
+    return;
+  }
+
+  // ── Only continue for inbound messages ───────────────────────────────────
+  if (typeWebhook !== 'incomingMessageReceived') {
+    logger.info('Ignoring unrecognised typeWebhook', { typeWebhook });
+    return;
+  }
+
+  const messageData = body.messageData;
+  const senderPhone = extractSenderPhone(body);
+  const typeMessage = messageData?.typeMessage;
+
+  if (!senderPhone || !typeMessage) {
+    logger.error('Missing senderPhone or typeMessage in payload', { body });
+    return;
+  }
+
+  logger.info('Routing inbound message', { senderPhone, typeMessage });
+
+  try {
+    switch (typeMessage) {
+
+      // ── Text ──────────────────────────────────────────────────────────────
+      case 'TextMessage':
+      case 'ExtendedTextMessage':
+        await handleTextMessage(messageData, senderPhone);
+        break;
+
+      // ── Voice ─────────────────────────────────────────────────────────────
+      case 'AudioMessage':
+      case 'PTTMessage':
+        await handleAudioMessage(messageData, senderPhone);
+        break;
+
+      // ── Image ─────────────────────────────────────────────────────────────
+      case 'ImageMessage':
+        await handleImageMessage(messageData, senderPhone);
+        break;
+
+      // ── Reactions — acknowledged silently, no reply ───────────────────────
+      case 'ReactionMessage':
+        logger.info('Emoji reaction received — no action taken', { senderPhone });
+        break;
+
+      // ── Everything else: sticker, video, document, contact, location, etc. ─
+      //    Per your requirement: always send the "not supported" reply
+      default:
+        logger.info('Unsupported message type — sending not-supported reply', {
+          senderPhone,
+          typeMessage,
+        });
+        await sendWhatsAppMessage(senderPhone, REPLIES.UNSUPPORTED_TYPE);
+        break;
+    }
+  } catch (err) {
+    logger.error('Unhandled error in message routing', {
+      senderPhone,
+      typeMessage,
+      error: err.message,
+      stack: err.stack,
+    });
+  }
+});
+
+// ── GET /webhook/health — uptime / load-balancer probe ───────────────────────
+router.get('/health', (_req, res) => {
+  res.json({
+    status:    'ok',
+    service:   'webhook',
+    uptime:    process.uptime(),
+    timestamp: new Date().toISOString(),
+  });
+});
 
 module.exports = router;

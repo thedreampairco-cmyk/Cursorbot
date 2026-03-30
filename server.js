@@ -1,15 +1,3 @@
-/**
- * server.js  —  Dream Pair Maya Backend
- *
- * Boot order:
- *   1. Env validation
- *   2. MongoDB connection
- *   3. Express middleware
- *   4. Route mounting
- *   5. Cron jobs
- *   6. HTTP server start
- */
-
 require("dotenv").config();
 
 const express      = require("express");
@@ -21,17 +9,18 @@ const mongoose     = require("mongoose");
 // ─── Routes ──────────────────────────────────────────────────────────────────
 const paymentWebhookRouter = require("./routes/webhooks");
 const orderNotifyRouter    = require("./routes/orderNotifications");
+const greenApiRouter       = require("./routes/webhook");
 
-// ─── Controllers (used by bot middleware, exported for testing) ───────────────
+// ─── Controllers ─────────────────────────────────────────────────────────────
 const orderController = require("./controllers/orderController");
 
 // ─── Cron Jobs ───────────────────────────────────────────────────────────────
-// Import triggers the scheduler — keep this after DB connection
 let cronStarted = false;
 
 // ─── Env Validation ───────────────────────────────────────────────────────────
 const REQUIRED_ENV = [
   "MONGODB_URI",
+  "GROQ_API_KEY",
   "RAZORPAY_KEY_ID",
   "RAZORPAY_KEY_SECRET",
   "RAZORPAY_WEBHOOK_SECRET",
@@ -57,21 +46,20 @@ const app = express();
 app.use(helmet());
 app.use(morgan("combined"));
 
-// Global rate limiter (protects all endpoints)
 app.use(
   rateLimit({
-    windowMs: 15 * 60 * 1000, // 15 min
+    windowMs: 15 * 60 * 1000,
     max:      200,
     standardHeaders: true,
     legacyHeaders:   false,
   })
 );
 
-// ─── IMPORTANT: Webhook route uses raw body parser ───────────────────────────
-// Mount BEFORE global json() so HMAC verification has access to raw bytes.
-app.use("/api/webhooks/payment", paymentWebhookRouter);
+// ─── Raw body routes BEFORE express.json() ───────────────────────────────────
+app.use("/api/webhooks/payment",  paymentWebhookRouter);
+app.use("/api/webhooks/greenapi", greenApiRouter);
 
-// Global JSON parser for all other routes
+// ─── Global JSON parser ───────────────────────────────────────────────────────
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
@@ -85,10 +73,8 @@ app.get("/health", (req, res) => {
   });
 });
 
-// ─── Payment Success Redirect (Razorpay callback) ─────────────────────────────
+// ─── Payment Success Redirect ─────────────────────────────────────────────────
 app.get("/payment/success", (req, res) => {
-  // Razorpay redirects here after hosted-page payment.
-  // The real confirmation comes via webhook; this page is just UX polish.
   res.send(`
     <html><body style="font-family:sans-serif;text-align:center;padding:60px">
       <h2>✅ Payment Received!</h2>
@@ -97,14 +83,10 @@ app.get("/payment/success", (req, res) => {
   `);
 });
 
-// ─── Order notifications (email + admin alert) ───────────────────────────────
-// Uses parsed JSON body — mounted AFTER express.json()
+// ─── Order notifications ──────────────────────────────────────────────────────
 app.use("/api/webhooks/order", orderNotifyRouter);
 
-// ─── [TODO] Add your Green API / LLM message handler route here ──────────────
-// app.use("/api/messages", require("./routes/messages"));
-
-// ─── MongoDB Connection ────────────────────────────────────────────────────────
+// ─── MongoDB + Server Start ───────────────────────────────────────────────────
 async function startServer() {
   try {
     await mongoose.connect(process.env.MONGODB_URI, {
@@ -112,7 +94,6 @@ async function startServer() {
     });
     console.log("✅ MongoDB connected");
 
-    // Start cron jobs only after DB is ready
     if (!cronStarted) {
       require("./jobs/tokenExpiryJob");
       cronStarted = true;
@@ -121,9 +102,10 @@ async function startServer() {
     const PORT = process.env.PORT || 3000;
     app.listen(PORT, () => {
       console.log(`🚀 Maya server running on port ${PORT}`);
-      console.log(`   Webhook endpoint: POST /api/webhooks/payment`);
-      console.log(`   Webhook endpoint: POST /api/webhooks/order`);
-      console.log(`   Health check:     GET  /health`);
+      console.log(`   Green API webhook:  POST /api/webhooks/greenapi`);
+      console.log(`   Payment webhook:    POST /api/webhooks/payment`);
+      console.log(`   Order webhook:      POST /api/webhooks/order`);
+      console.log(`   Health check:       GET  /health`);
     });
   } catch (err) {
     console.error("❌ Failed to start server:", err);
@@ -133,4 +115,4 @@ async function startServer() {
 
 startServer();
 
-module.exports = { app, orderController }; // exported for tests
+module.exports = { app, orderController };
