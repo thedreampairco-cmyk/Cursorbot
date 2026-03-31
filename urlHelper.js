@@ -1,89 +1,85 @@
-'use strict';
+// urlHelper.js
+"use strict";
+
+const APP_BASE_URL = (process.env.APP_BASE_URL || "").replace(/\/$/, "");
+const BASE_URL     = (process.env.BASE_URL     || "").replace(/\/$/, "");
 
 /**
- * Validates that a string is an absolute HTTP/HTTPS URL.
+ * Build an absolute URL under APP_BASE_URL.
+ * @param {string} path  - e.g. "/api/payment/callback"
+ * @param {Record<string,string|number>} [params] - optional query params
+ * @returns {string}
  */
-function isValidUrl(str) {
-  try {
-    const url = new URL(str);
-    return url.protocol === 'http:' || url.protocol === 'https:';
-  } catch {
-    return false;
-  }
-}
-
-/**
- * Converts any Google Drive share/view link into a direct download URL
- * that WhatsApp (Green API) can fetch and display without a grey box.
- *
- * Handles all known Drive URL formats:
- *   https://drive.google.com/file/d/FILE_ID/view
- *   https://drive.google.com/file/d/FILE_ID/view?usp=sharing
- *   https://drive.google.com/open?id=FILE_ID
- *   https://drive.google.com/uc?id=FILE_ID
- *   https://drive.google.com/uc?export=view&id=FILE_ID
- */
-function convertDriveUrl(url) {
-  if (!url || typeof url !== 'string') return url;
-
-  // Already a direct thumbnail/download link — leave as-is
-  if (url.includes('drive.google.com/uc?export=download')) return url;
-
-  let fileId = null;
-
-  // Format: /file/d/FILE_ID/
-  const fileMatch = url.match(/\/file\/d\/([a-zA-Z0-9_-]+)/);
-  if (fileMatch) fileId = fileMatch[1];
-
-  // Format: open?id=FILE_ID  or  uc?id=FILE_ID  or  uc?export=view&id=FILE_ID
-  if (!fileId) {
-    const paramMatch = url.match(/[?&]id=([a-zA-Z0-9_-]+)/);
-    if (paramMatch) fileId = paramMatch[1];
-  }
-
-  if (fileId) {
-    // Use export=download for direct binary — works reliably with Green API
-    return `https://drive.google.com/uc?export=download&id=${fileId}`;
-  }
-
-  // Not a Drive link — return as-is
-  return url;
-}
-
-/**
- * Picks the first valid image URL from a product object,
- * converting Google Drive links automatically.
- * Checks imageUrl, image_url, image, img columns in that order.
- * NEVER constructs a filename — always reads from sheet data.
- */
-function extractImageUrl(product) {
-  const candidates = [
-    product?.imageUrl,
-    product?.image_url,
-    product?.image,
-    product?.img,
-    product?.photo,
-    product?.picture,
-  ];
-
-  for (const raw of candidates) {
-    if (!raw) continue;
-    const converted = convertDriveUrl(raw.trim());
-    if (isValidUrl(converted)) return converted;
-  }
-
-  return null;
-}
-
-/**
- * Safely encodes query params for a URL.
- */
-function buildUrl(base, params = {}) {
-  const url = new URL(base);
-  Object.entries(params).forEach(([k, v]) => {
-    if (v !== undefined && v !== null) url.searchParams.set(k, String(v));
-  });
+function buildAppUrl(path, params = {}) {
+  if (!APP_BASE_URL) throw new Error("APP_BASE_URL is not set in environment.");
+  const url = new URL(`${APP_BASE_URL}${path.startsWith("/") ? path : "/" + path}`);
+  Object.entries(params).forEach(([k, v]) => url.searchParams.set(k, String(v)));
   return url.toString();
 }
 
-module.exports = { isValidUrl, extractImageUrl, convertDriveUrl, buildUrl };
+/**
+ * Build an absolute URL under BASE_URL (public-facing / CDN base).
+ * @param {string} path
+ * @param {Record<string,string|number>} [params]
+ * @returns {string}
+ */
+function buildBaseUrl(path, params = {}) {
+  if (!BASE_URL) throw new Error("BASE_URL is not set in environment.");
+  const url = new URL(`${BASE_URL}${path.startsWith("/") ? path : "/" + path}`);
+  Object.entries(params).forEach(([k, v]) => url.searchParams.set(k, String(v)));
+  return url.toString();
+}
+
+/**
+ * Build a Razorpay payment callback URL for a given order token.
+ * @param {string} token
+ * @returns {string}
+ */
+function buildPaymentCallbackUrl(token) {
+  return buildAppUrl("/api/payment/callback", { token });
+}
+
+/**
+ * Build a Razorpay webhook endpoint URL.
+ * @returns {string}
+ */
+function buildRazorpayWebhookUrl() {
+  return buildAppUrl("/api/webhooks/razorpay");
+}
+
+/**
+ * Build an order webhook URL (for internal/admin events).
+ * @returns {string}
+ */
+function buildOrderWebhookUrl() {
+  return buildAppUrl("/api/webhooks/order");
+}
+
+/**
+ * Build an unboxing video upload URL for a given order ID.
+ * @param {string} orderId
+ * @returns {string}
+ */
+function buildUnboxingUploadUrl(orderId) {
+  return buildAppUrl("/api/unboxing/upload", { orderId });
+}
+
+/**
+ * Safely join two URL segments, avoiding double slashes.
+ * @param {string} base
+ * @param {string} segment
+ * @returns {string}
+ */
+function joinUrl(base, segment) {
+  return `${base.replace(/\/$/, "")}/${segment.replace(/^\//, "")}`;
+}
+
+module.exports = {
+  buildAppUrl,
+  buildBaseUrl,
+  buildPaymentCallbackUrl,
+  buildRazorpayWebhookUrl,
+  buildOrderWebhookUrl,
+  buildUnboxingUploadUrl,
+  joinUrl,
+};
