@@ -22,7 +22,7 @@
  *
  *  SERVICE PATHS (verified against your real file tree):
  *    services/whatsapp/greenApiText.js     → sendText(waId, text)
- *    services/aiResponse.js                → getAIResponse(text)
+ *    services/aiResponse.js                → generateResponse(text)
  *    services/features/voiceSearchService  → handleIncomingAudio(url, phone)
  *    services/features/visionRecognition   → getVisionAnalysis(url)
  *    fraud/index.js                        → onIncomingWhatsAppMessage(msg)
@@ -38,7 +38,7 @@ const router  = express.Router();
 
 // ─── Services (all paths verified against your actual file tree) ──────────────
 const { sendText }                  = require('../services/whatsappService.js');
-const { getAIResponse }             = require('../services/aiIntegration.js');
+const { generateResponse }             = require('../services/aiIntegration.js');
 const { handleIncomingAudio }       = require('../services/features/voiceSearchService');
 const { onIncomingWhatsAppMessage } = require('../fraud');
 const Client                        = require('../models/Client');
@@ -187,7 +187,7 @@ async function processTextWithAI(userText, senderPhone) {
   }
 
   // ── Get AI response ───────────────────────────────────────────────────────
-  const aiReply = await getAIResponse(prompt);
+  const aiReply = await generateResponse(prompt);
 
   // ── Save to history and persist ───────────────────────────────────────────
   client.addMessage('assistant', aiReply);
