@@ -24,7 +24,7 @@ function endpoint(method) {
  */
 async function sendText(to, message) {
   try {
-    const chatId = `${to}@c.us`;
+    const chatId = to.includes('@') ? to : `${to}@c.us`;
     await axios.post(endpoint("sendMessage"), {
       chatId,
       message,
