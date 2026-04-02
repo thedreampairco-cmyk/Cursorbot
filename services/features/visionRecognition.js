@@ -1,268 +1,543 @@
-'use strict';
+// services/features/visionRecognition.js
+"use strict";
 
-const axios  = require('axios');
-const env    = require('../../config/env');
-const { logger } = require('../../errorHandler');
-const memoryStore = require('../data/memoryStore');
+const { logger, AppError }           = require("../../errorHandler");
+const {
+  analyzeSneakerImage,
+  matchSneakerFromCatalog,
+  generateResponse,
+  MAYA_SYSTEM_PROMPT,
+}                                    = require("../aiIntegration");
+const {
+  fetchIncomingMedia,
+  getMediaDownloadUrl,
+}                                    = require("../whatsapp/greenApiMedia");
+const {
+  getCatalog,
+  getAvailableSizes,
+  suggestAlternatives,
+}                                    = require("./inventoryService");
+const {
+  updateConversationPayload,
+  setUserPrefs,
+  getUserPrefs,
+}                                    = require("../memoryStore");
 
-const VISION_MODEL = 'meta-llama/llama-4-scout-17b-16e-instruct';
+// ─── Constants ────────────────────────────────────────────────────────────────
 
-// ── Step 1: Detect mime type from buffer magic bytes ─────────────────────────
-function detectMimeType(buffer) {
-  const hex = buffer.slice(0, 4).toString('hex');
-  if (hex.startsWith('ffd8ff'))   return 'image/jpeg';
-  if (hex.startsWith('89504e47')) return 'image/png';
-  if (hex.startsWith('47494638')) return 'image/gif';
-  if (hex.startsWith('52494646')) return 'image/webp';
-  return 'image/jpeg';
+const SUPPORTED_IMAGE_TYPES = ["image/jpeg", "image/png", "image/webp", "image/gif"];
+const MAX_IMAGE_BYTES        = 10 * 1024 * 1024; // 10 MB
+
+// ─── Internal Helpers ─────────────────────────────────────────────────────────
+
+/**
+ * Convert a Buffer to a base64 data URI.
+ * @param {Buffer} buffer
+ * @param {string} [mimeType="image/jpeg"]
+ * @returns {string}
+ */
+function _bufferToDataUri(buffer, mimeType = "image/jpeg") {
+  return `data:${mimeType};base64,${buffer.toString("base64")}`;
 }
 
-// ── Step 2: Download image from Green API into memory buffer ─────────────────
-async function downloadImageBuffer(imageUrl) {
-  logger.info('[Vision] Downloading image into memory...', { url: imageUrl.slice(0, 80) });
-
-  const response = await axios({
-    url: imageUrl,
-    method: 'GET',
-    responseType: 'arraybuffer',
-    timeout: 15000,
-    headers: { 'User-Agent': 'Mozilla/5.0' },
-  });
-
-  return Buffer.from(response.data);
-}
-
-// ── Step 3: Fetch image URL from Green API ───────────────────────────────────
-async function fetchImageUrlFromGreenApi(chatId, idMessage) {
-  const BASE = env.greenApi.baseUrl || 'https://api.greenapi.com';
-  const INST = env.greenApi.instanceId;
-  const TOK  = env.greenApi.token;
-
-  logger.info('[Vision] Calling Green API downloadFile...', { idMessage, chatId });
-
-  // Small delay — Green API needs a moment before media is ready
-  await new Promise((r) => setTimeout(r, 1500));
-
+/**
+ * Safely parse JSON from a raw LLM response string.
+ * Extracts the first {...} or [...] block found.
+ * @param {string} raw
+ * @returns {object|null}
+ */
+function _safeParseJson(raw) {
+  const match = raw.match(/(\{[\s\S]*?\}|\[[\s\S]*?\])/);
+  if (!match) return null;
   try {
-    const res = await axios.post(
-      `${BASE}/waInstance${INST}/downloadFile/${TOK}`,
-      { chatId, idMessage },
-      {
-        timeout: 15000,
-        headers: { 'Content-Type': 'application/json' },
-      }
+    return JSON.parse(match[0]);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Validate that a mimeType is a supported image format.
+ * @param {string} mimeType
+ * @returns {boolean}
+ */
+function isSupportedImageType(mimeType) {
+  return SUPPORTED_IMAGE_TYPES.includes((mimeType || "").toLowerCase());
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// IMAGE ACQUISITION
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/**
+ * Download an incoming WhatsApp image from Green API and return as a base64 data URI.
+ * Called when a customer sends an image in WhatsApp.
+ *
+ * @param {string} chatIdStr  - "919876543210@c.us"
+ * @param {string} idMessage  - Green API message ID
+ * @returns {Promise<{ dataUri: string, mimeType: string, sizeBytes: number }>}
+ */
+async function downloadWhatsAppImage(chatIdStr, idMessage) {
+  try {
+    // Step 1: resolve the download URL from Green API
+    const { downloadUrl, mimeType } = await getMediaDownloadUrl(chatIdStr, idMessage);
+
+    if (!isSupportedImageType(mimeType)) {
+      throw new AppError(
+        `Unsupported image type "${mimeType}". Please send a JPEG, PNG, or WebP image.`,
+        415,
+        "UNSUPPORTED_IMAGE_TYPE"
+      );
+    }
+
+    // Step 2: download the binary
+    const buffer = await fetchIncomingMedia(downloadUrl);
+
+    if (buffer.byteLength > MAX_IMAGE_BYTES) {
+      throw new AppError(
+        `Image is too large (${(buffer.byteLength / 1024 / 1024).toFixed(1)} MB). Max 10 MB.`,
+        413,
+        "IMAGE_TOO_LARGE"
+      );
+    }
+
+    const dataUri = _bufferToDataUri(buffer, mimeType);
+    logger.info(
+      `[Vision] Image downloaded | idMessage=${idMessage} | mime=${mimeType} | bytes=${buffer.byteLength}`
     );
-    logger.info('[Vision] downloadFile JSON response', {
-      keys: Object.keys(res.data || {}),
-      data: JSON.stringify(res.data).slice(0, 300),
-    });
-    const url = res.data?.downloadUrl
-             || res.data?.fileUrl
-             || res.data?.url
-             || res.data?.urlFile
-             || null;
-    if (url) return { url, direct: false };
+
+    return { dataUri, mimeType, sizeBytes: buffer.byteLength };
   } catch (err) {
-    logger.warn('[Vision] downloadFile (json) failed', {
-      status: err?.response?.status,
-      error: err.message,
-      data: JSON.stringify(err?.response?.data).slice(0, 200),
+    if (err instanceof AppError) throw err;
+    logger.error(`[Vision] downloadWhatsAppImage failed: ${err.message}`);
+    throw new AppError(
+      "Failed to download your image. Please try sending it again.",
+      502,
+      "IMAGE_DOWNLOAD_FAILED"
+    );
+  }
+}
+
+/**
+ * Fetch a publicly accessible image URL and return as a base64 data URI.
+ * Use when the customer provides a product URL rather than uploading directly.
+ *
+ * @param {string} imageUrl
+ * @returns {Promise<{ dataUri: string, mimeType: string }>}
+ */
+async function fetchPublicImage(imageUrl) {
+  try {
+    const buffer = await fetchIncomingMedia(imageUrl);
+    // Naive MIME detection from URL extension
+    const ext      = imageUrl.split("?")[0].split(".").pop().toLowerCase();
+    const mimeMap  = { jpg: "image/jpeg", jpeg: "image/jpeg", png: "image/png", webp: "image/webp" };
+    const mimeType = mimeMap[ext] || "image/jpeg";
+
+    if (buffer.byteLength > MAX_IMAGE_BYTES) {
+      throw new AppError("Image URL content exceeds the 10 MB limit.", 413, "IMAGE_TOO_LARGE");
+    }
+
+    return { dataUri: _bufferToDataUri(buffer, mimeType), mimeType };
+  } catch (err) {
+    if (err instanceof AppError) throw err;
+    logger.error(`[Vision] fetchPublicImage failed: ${err.message}`);
+    throw new AppError("Failed to fetch the image URL.", 502, "IMAGE_FETCH_FAILED");
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// VISION ANALYSIS
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/**
+ * Analyse a sneaker image (data URI or public URL) with the Groq vision model.
+ * Returns a structured recognition result.
+ *
+ * @param {string} imageInput  - base64 data URI or public URL
+ * @returns {Promise<{
+ *   brand:       string|null,
+ *   model:       string|null,
+ *   colorway:    string,
+ *   silhouette:  string,
+ *   keyFeatures: string[],
+ *   priceRange:  string,
+ *   confidence:  number,
+ *   rawResponse: string
+ * }>}
+ */
+async function analyseImage(imageInput) {
+  try {
+    const rawResponse = await analyzeSneakerImage(imageInput);
+    const parsed      = _safeParseJson(rawResponse);
+
+    if (!parsed) {
+      logger.warn(`[Vision] analyseImage: could not parse JSON. raw="${rawResponse.slice(0, 120)}"`);
+      return {
+        brand:       null,
+        model:       null,
+        colorway:    "unknown",
+        silhouette:  "unknown",
+        keyFeatures: [],
+        priceRange:  "unknown",
+        confidence:  0,
+        rawResponse,
+      };
+    }
+
+    return {
+      brand:       parsed.brand       || null,
+      model:       parsed.model       || null,
+      colorway:    parsed.colorway    || "unknown",
+      silhouette:  parsed.silhouette  || "unknown",
+      keyFeatures: Array.isArray(parsed.keyFeatures) ? parsed.keyFeatures : [],
+      priceRange:  parsed.priceRange  || "unknown",
+      confidence:  typeof parsed.confidence === "number" ? parsed.confidence : 0,
+      rawResponse,
+    };
+  } catch (err) {
+    if (err instanceof AppError) throw err;
+    logger.error(`[Vision] analyseImage failed: ${err.message}`);
+    throw new AppError("Sneaker analysis failed. Please try a clearer photo.", 502, "VISION_ANALYSIS_FAILED");
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// CATALOG MATCHING
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/**
+ * Build a searchable description string from a vision analysis result.
+ * @param {object} analysis  - output of analyseImage
+ * @returns {string}
+ */
+function buildSearchDescription(analysis) {
+  const parts = [];
+  if (analysis.brand)                       parts.push(analysis.brand);
+  if (analysis.model)                       parts.push(analysis.model);
+  if (analysis.colorway && analysis.colorway !== "unknown") parts.push(analysis.colorway);
+  if (analysis.silhouette && analysis.silhouette !== "unknown") parts.push(analysis.silhouette);
+  if (analysis.keyFeatures.length)          parts.push(...analysis.keyFeatures.slice(0, 2));
+  return parts.join(" ");
+}
+
+/**
+ * Match an analysed image to products in the catalog.
+ * Falls back to keyword search if AI catalog matching returns nothing.
+ *
+ * @param {object} analysis  - output of analyseImage
+ * @param {number} [topK=3]
+ * @returns {Promise<object[]>}
+ */
+async function matchToProducts(analysis, topK = 3) {
+  try {
+    const catalog     = await getCatalog();
+    const description = buildSearchDescription(analysis);
+
+    if (!description.trim()) {
+      logger.warn("[Vision] matchToProducts: empty description, returning top featured products.");
+      return catalog.slice(0, topK);
+    }
+
+    // Primary: AI-powered semantic match
+    const aiMatches = await matchSneakerFromCatalog(description, catalog, topK);
+    if (aiMatches.length > 0) {
+      logger.info(`[Vision] AI match: ${aiMatches.length} result(s) for "${description}"`);
+      return aiMatches;
+    }
+
+    // Fallback: naive keyword search
+    const terms    = description.toLowerCase().split(/\s+/).filter(Boolean);
+    const fallback = catalog.filter((p) => {
+      const hay = `${p.brand} ${p.name} ${p.category} ${p.description}`.toLowerCase();
+      return terms.some((t) => hay.includes(t));
     });
+
+    logger.info(`[Vision] Keyword fallback: ${fallback.length} result(s) for "${description}"`);
+    return fallback.slice(0, topK);
+  } catch (err) {
+    logger.error(`[Vision] matchToProducts failed: ${err.message}`);
+    return []; // Graceful degradation
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// FULL PIPELINE
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/**
+ * Run the complete vision pipeline for a WhatsApp image message.
+ *
+ *  1. Download the image from Green API
+ *  2. Analyse with Groq vision model
+ *  3. Match to catalog products
+ *  4. Generate a Maya response
+ *  5. Update conversation state with found products
+ *
+ * @param {string} phone       - customer phone
+ * @param {string} chatIdStr   - Green API chat ID
+ * @param {string} idMessage   - Green API message ID
+ * @returns {Promise<{
+ *   analysis:  object,
+ *   products:  object[],
+ *   response:  string,
+ *   matched:   boolean
+ * }>}
+ */
+async function processWhatsAppImage(phone, chatIdStr, idMessage) {
+  try {
+    // 1. Download
+    const { dataUri } = await downloadWhatsAppImage(chatIdStr, idMessage);
+
+    // 2. Analyse
+    const analysis = await analyseImage(dataUri);
+    logger.info(
+      `[Vision] Analysis complete for ${phone} | brand=${analysis.brand} | confidence=${analysis.confidence}`
+    );
+
+    // 3. Match
+    const products = await matchToProducts(analysis, 3);
+
+    // 4. Generate response
+    const response = await _buildVisionResponse(phone, analysis, products);
+
+    // 5. Update state
+    if (products.length > 0) {
+      updateConversationPayload(phone, { lastSearchResults: products.map((p) => p.sku) });
+
+      // Capture brand preference for personalisation
+      if (analysis.brand && analysis.confidence >= 0.7) {
+        setUserPrefs(phone, { preferredBrand: analysis.brand });
+      }
+    }
+
+    return { analysis, products, response, matched: products.length > 0 };
+  } catch (err) {
+    if (err instanceof AppError) throw err;
+    logger.error(`[Vision] processWhatsAppImage failed for ${phone}: ${err.message}`);
+    throw new AppError(
+      "I couldn't analyse that image. Please send a clearer photo of the sneaker.",
+      502,
+      "VISION_PIPELINE_FAILED"
+    );
+  }
+}
+
+/**
+ * Run the vision pipeline for a publicly accessible image URL.
+ *
+ * @param {string} phone
+ * @param {string} imageUrl
+ * @returns {Promise<{ analysis: object, products: object[], response: string, matched: boolean }>}
+ */
+async function processImageUrl(phone, imageUrl) {
+  try {
+    const { dataUri } = await fetchPublicImage(imageUrl);
+    const analysis    = await analyseImage(dataUri);
+    const products    = await matchToProducts(analysis, 3);
+    const response    = await _buildVisionResponse(phone, analysis, products);
+
+    if (products.length > 0) {
+      updateConversationPayload(phone, { lastSearchResults: products.map((p) => p.sku) });
+    }
+
+    return { analysis, products, response, matched: products.length > 0 };
+  } catch (err) {
+    if (err instanceof AppError) throw err;
+    logger.error(`[Vision] processImageUrl failed for ${phone}: ${err.message}`);
+    throw new AppError("Failed to process the image URL.", 502, "VISION_URL_PIPELINE_FAILED");
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// RESPONSE GENERATION
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/**
+ * Build Maya's conversational reply for a vision search result.
+ * @param {string}   phone
+ * @param {object}   analysis
+ * @param {object[]} products
+ * @returns {Promise<string>}
+ */
+async function _buildVisionResponse(phone, analysis, products) {
+  const prefs    = getUserPrefs(phone);
+  const language = prefs.language || "en";
+
+  if (products.length === 0) {
+    return _noMatchResponse(analysis, language);
   }
 
-  return null;
-}
-
-// ── Step 4: Convert buffer to base64 data URL ────────────────────────────────
-function bufferToDataUrl(buffer) {
-  const mime   = detectMimeType(buffer);
-  const base64 = Buffer.from(buffer).toString('base64');
-  return `data:${mime};base64,${base64}`;
-}
-
-// ── Step 5: Send base64 image to Groq Vision ─────────────────────────────────
-async function analyseWithGroqVision(base64DataUrl) {
-  logger.info('[Vision] Sending base64 image to Groq llama-4-scout...');
-
-  // Build catalog brand list for better recognition
-  const catalog   = memoryStore.getCatalog();
-  const brandList = [...new Set(catalog.map((p) => p.name))].slice(0, 20).join(', ');
-
-  const response = await axios.post(
-    'https://api.groq.com/openai/v1/chat/completions',
-    {
-      model: VISION_MODEL,
-      max_tokens: 200,
-      temperature: 0.1,
-      response_format: { type: 'json_object' },
-      messages: [
-        {
-          role: 'user',
-          content: [
-            {
-              type: 'text',
-              text: `Analyze this sneaker/shoe image. Reply ONLY with valid JSON, no markdown.
-Format: {"detected_text": "brand and model name", "brand": "brand name", "color": "main color", "labels": ["tag1","tag2"]}
-Try to match these products if possible: ${brandList}
-Example: {"detected_text": "Nike Air Max 90", "brand": "Nike", "color": "White", "labels": ["running","casual"]}`,
-            },
-            {
-              type: 'image_url',
-              image_url: { url: base64DataUrl },
-            },
-          ],
-        },
-      ],
-    },
-    {
-      timeout: 25000,
-      headers: {
-        Authorization: `Bearer ${env.groq.apiKey}`,
-        'Content-Type': 'application/json',
-      },
-    }
+  // Enrich products with available sizes
+  const enriched = await Promise.all(
+    products.map(async (p) => ({
+      ...p,
+      availableSizes: await getAvailableSizes(p.sku),
+    }))
   );
 
-  const raw    = response.data.choices[0].message.content;
-  const result = JSON.parse(raw);
-  logger.info('[Vision] Groq result', { result });
-  return result;
-}
+  const productContext = enriched
+    .map(
+      (p, i) =>
+        `${i + 1}. ${p.brand} ${p.name} | SKU: ${p.sku} | ` +
+        `₹${p.price.toLocaleString("en-IN")} | ` +
+        `Sizes: ${p.availableSizes.join(", ") || "ask us"} | ` +
+        `Stock: ${p.stock > 0 ? "In stock" : "Out of stock"}`
+    )
+    .join("\n");
 
-// ── Step 6: Match vision result to catalog ───────────────────────────────────
-function matchToCatalog(visionResult) {
-  if (!visionResult?.detected_text) return [];
+  const visionSummary =
+    analysis.brand
+      ? `Detected: ${analysis.brand}${analysis.model ? " " + analysis.model : ""} ` +
+        `(${Math.round(analysis.confidence * 100)}% confidence)`
+      : "Sneaker detected (brand unconfirmed)";
 
-  const { brand, detected_text, color } = visionResult;
-  const catalog = memoryStore.getCatalog();
+  const userContent =
+    `A customer sent a sneaker photo. Vision analysis: "${visionSummary}".\n\n` +
+    `Matching catalog products:\n${productContext}\n\n` +
+    `Respond as Maya. Mention what was detected, list the matches enthusiastically, ` +
+    `and invite the customer to select a product or ask for sizes. ` +
+    `${language === "hi" ? "Respond in Hindi/Hinglish." : "Respond in English."} ` +
+    `Keep it under 120 words.`;
 
-  const scored = catalog
-    .filter((p) => p.inStock)
-    .map((p) => {
-      let score = 0;
-      if (brand        && p.brand?.toLowerCase().includes(brand.toLowerCase()))                          score += 4;
-      if (detected_text && p.name?.toLowerCase().includes(detected_text.toLowerCase().split(' ')[0]))   score += 3;
-      if (color        && p.color?.toLowerCase().includes(color.toLowerCase()))                          score += 2;
-      const hay = `${p.name} ${p.brand} ${p.category}`.toLowerCase();
-      if (detected_text && hay.includes(detected_text.toLowerCase().split(' ')[0]))                      score += 1;
-      return { product: p, score };
-    })
-    .filter((x) => x.score > 0)
-    .sort((a, b) => b.score - a.score)
-    .slice(0, 4)
-    .map((x) => x.product);
-
-  return scored;
-}
-
-// ── MAIN: Full pipeline ───────────────────────────────────────────────────────
-/**
- * Full vision pipeline:
- * 1. Get image URL from Green API using message ID
- * 2. Download image into memory buffer
- * 3. Convert buffer to base64
- * 4. Send to Groq Vision
- * 5. Match result to catalog
- *
- * @param {string} chatId     - WhatsApp chat ID
- * @param {string} idMessage  - Green API message ID
- * @param {string} imageUrl   - Direct URL if already available (optional)
- * @param {string} jpegThumb  - base64 thumbnail fallback (optional)
- */
-async function matchSneakerFromImage(chatId, idMessage, imageUrl = null, jpegThumb = null) {
-  let base64DataUrl = null;
-
-  // ── Try to get image from Green API using message ID ──
-  if (!base64DataUrl && idMessage && chatId) {
-    try {
-      const result = await fetchImageUrlFromGreenApi(chatId, idMessage);
-      if (result?.direct) {
-        // Already have base64 from direct file download
-        base64DataUrl = result.dataUrl;
-        logger.info('[Vision] Got base64 directly from Green API downloadFile');
-      } else if (result?.url) {
-        // Got a URL — download it
-        imageUrl = result.url;
-      }
-    } catch (err) {
-      logger.warn('[Vision] fetchImageUrlFromGreenApi failed', { error: err.message });
-    }
-  }
-
-  // ── Download image from URL into memory ──
-  if (!base64DataUrl && imageUrl) {
-    try {
-      const buffer = await downloadImageBuffer(imageUrl);
-      base64DataUrl = bufferToDataUrl(buffer);
-      logger.info('[Vision] Image downloaded from URL', {
-        sizeKB: Math.round(buffer.length / 1024),
-      });
-    } catch (err) {
-      logger.warn('[Vision] Image download from URL failed', { error: err.message });
-    }
-  }
-
-  // ── Fallback: use jpegThumbnail from Green API payload ──
-  if (!base64DataUrl && jpegThumb) {
-    logger.info('[Vision] Using jpegThumbnail as fallback');
-    base64DataUrl = jpegThumb.startsWith('data:')
-      ? jpegThumb
-      : `data:image/jpeg;base64,${jpegThumb}`;
-  }
-
-  // ── No image available ──
-  if (!base64DataUrl) {
-    logger.warn('[Vision] No image data available after all attempts');
-    return { identified: null, matches: [], noUrl: true };
-  }
-
-  // ── Send to Groq Vision ──
-  let visionResult = null;
   try {
-    visionResult = await analyseWithGroqVision(base64DataUrl);
-  } catch (err) {
-    logger.error('[Vision] Groq vision failed', { error: err.message });
-    return { identified: null, matches: [] };
+    return await generateResponse(
+      [{ role: "user", content: userContent }],
+      MAYA_SYSTEM_PROMPT
+    );
+  } catch {
+    return _fallbackVisionResponse(enriched);
   }
-
-  if (!visionResult?.detected_text) {
-    return { identified: null, matches: [] };
-  }
-
-  const matches    = matchToCatalog(visionResult);
-  const identified = visionResult.detected_text;
-
-  logger.info('[Vision] Pipeline complete', { identified, matches: matches.length });
-  return { identified, matches };
 }
 
-// ── Utility exports ───────────────────────────────────────────────────────────
-function findMatchesByDescription({ brand, model, color, query } = {}) {
-  const catalog = memoryStore.getCatalog();
-  return catalog
-    .filter((p) => p.inStock)
-    .map((p) => {
-      let score = 0;
-      if (brand && p.brand?.toLowerCase().includes(brand.toLowerCase())) score += 4;
-      if (model && p.name?.toLowerCase().includes(model.toLowerCase().split(' ')[0])) score += 3;
-      if (color && p.color?.toLowerCase().includes(color.toLowerCase())) score += 2;
-      if (query) {
-        const hay = `${p.name} ${p.brand} ${p.category} ${p.color}`.toLowerCase();
-        if (hay.includes(query.toLowerCase())) score += 2;
-      }
-      return { product: p, score };
-    })
-    .filter((x) => x.score > 0)
-    .sort((a, b) => b.score - a.score)
-    .slice(0, 4)
-    .map((x) => x.product);
+/**
+ * Fallback plain-text response when the LLM is unavailable.
+ * @param {object[]} products
+ * @returns {string}
+ */
+function _fallbackVisionResponse(products) {
+  const lines = products.map(
+    (p, i) =>
+      `${i + 1}. 👟 *${p.brand} ${p.name}* — ₹${p.price.toLocaleString("en-IN")}`
+  );
+  return (
+    `🔍 I found these matches for your photo!\n\n` +
+    lines.join("\n") +
+    `\n\nReply with the number to see sizes & details 👆`
+  );
+}
+
+/**
+ * Response when no catalog match is found.
+ * @param {object} analysis
+ * @param {string} language
+ * @returns {string}
+ */
+function _noMatchResponse(analysis, language) {
+  const brand = analysis.brand || "that sneaker";
+  if (language === "hi") {
+    return (
+      `😔 Ek dum sahi match nahi mila *${brand}* ke liye abhi.\n\n` +
+      `Aap humara catalog dekh sakte hain ya koi aur photo bhej sakte hain! 👟`
+    );
+  }
+  return (
+    `😔 I couldn't find an exact match for *${brand}* in our catalog right now.\n\n` +
+    `Try browsing our full collection or send a different photo! 👟`
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// MULTI-PRODUCT VISION COMPARISON
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/**
+ * Compare two vision analysis results and generate a comparison response.
+ * Useful when a customer sends two photos asking "which is better?".
+ *
+ * @param {string}   phone
+ * @param {object}   analysisA  - first analysis result
+ * @param {object}   analysisB  - second analysis result
+ * @returns {Promise<string>}
+ */
+async function compareVisionResults(phone, analysisA, analysisB) {
+  const prefs    = getUserPrefs(phone);
+  const language = prefs.language || "en";
+
+  const descA = buildSearchDescription(analysisA);
+  const descB = buildSearchDescription(analysisB);
+
+  const userContent =
+    `A customer shared two sneaker images and wants a comparison.\n\n` +
+    `Sneaker A: "${descA}" (confidence: ${Math.round(analysisA.confidence * 100)}%)\n` +
+    `Sneaker B: "${descB}" (confidence: ${Math.round(analysisB.confidence * 100)}%)\n\n` +
+    `Give a fun, knowledgeable comparison as Maya covering style, use-case, and fit. ` +
+    `${language === "hi" ? "Respond in Hindi/Hinglish." : "Respond in English."} Under 120 words.`;
+
+  try {
+    return await generateResponse(
+      [{ role: "user", content: userContent }],
+      MAYA_SYSTEM_PROMPT
+    );
+  } catch {
+    return `👟 *Sneaker A:* ${descA || "Unknown"}\n👟 *Sneaker B:* ${descB || "Unknown"}\n\nBoth look great! Which would you like to add to your cart? 🔥`;
+  }
+}
+
+/**
+ * Analyse a customer-provided image against a known SKU for similarity check.
+ * Used to verify if the customer received the correct product.
+ *
+ * @param {string} imageInput  - data URI or URL
+ * @param {string} sku         - expected SKU
+ * @returns {Promise<{ match: boolean, confidence: number, analysis: object }>}
+ */
+async function verifySneakerIdentity(imageInput, sku) {
+  try {
+    const product  = await getCatalog().then((c) => c.find((p) => p.sku === sku));
+    if (!product) throw new AppError(`SKU "${sku}" not found in catalog.`, 404, "SKU_NOT_FOUND");
+
+    const analysis = await analyseImage(imageInput);
+    const brandMatch = analysis.brand
+      ? product.brand.toLowerCase().includes(analysis.brand.toLowerCase()) ||
+        analysis.brand.toLowerCase().includes(product.brand.toLowerCase())
+      : false;
+
+    const nameWords  = product.name.toLowerCase().split(/\s+/);
+    const modelMatch = analysis.model
+      ? nameWords.some((w) => analysis.model.toLowerCase().includes(w))
+      : false;
+
+    const match      = (brandMatch || modelMatch) && analysis.confidence >= 0.5;
+    logger.info(
+      `[Vision] Identity check for SKU ${sku}: match=${match} | confidence=${analysis.confidence}`
+    );
+
+    return { match, confidence: analysis.confidence, analysis };
+  } catch (err) {
+    if (err instanceof AppError) throw err;
+    logger.error(`[Vision] verifySneakerIdentity failed: ${err.message}`);
+    throw new AppError("Product verification failed.", 502, "VISION_VERIFY_FAILED");
+  }
 }
 
 module.exports = {
-  matchSneakerFromImage,
-  findMatchesByDescription,
-  downloadImageBuffer,
-  fetchImageUrlFromGreenApi,
-  bufferToDataUrl,
-  analyseWithGroqVision,
+  // Image Acquisition
+  downloadWhatsAppImage,
+  fetchPublicImage,
+  isSupportedImageType,
+
+  // Analysis
+  analyseImage,
+  buildSearchDescription,
+
+  // Matching
+  matchToProducts,
+
+  // Full Pipelines
+  processWhatsAppImage,
+  processImageUrl,
+
+  // Comparisons & Verification
+  compareVisionResults,
+  verifySneakerIdentity,
 };
