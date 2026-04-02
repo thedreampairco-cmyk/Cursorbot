@@ -111,14 +111,15 @@ function normaliseForFraud(body) {
   const base        = { from: senderPhone };
 
   switch (type) {
-    case 'TextMessage':
-    case 'ExtendedTextMessage': {
+    // FIX: Changed to match Green API's exact camelCase payloads
+    case 'textMessage':
+    case 'extendedTextMessage': {
       const textBody =
         msgData?.textMessageData?.textMessage ||
         msgData?.extendedTextMessageData?.text || '';
       return { ...base, type: 'text', text: { body: textBody } };
     }
-    case 'LocationMessage': {
+    case 'locationMessage': {
       const loc = msgData?.locationMessageData;
       return {
         ...base,
@@ -126,10 +127,11 @@ function normaliseForFraud(body) {
         location: { latitude: loc?.latitude, longitude: loc?.longitude },
       };
     }
-    case 'VideoMessage': {
+    case 'videoMessage': {
       return {
         ...base,
         type: 'video',
+        // Note: Ensure your Green API instance is configured to include download URLs in webhooks
         video: { id: msgData?.fileMessageData?.downloadUrl },
       };
     }
@@ -137,6 +139,7 @@ function normaliseForFraud(body) {
       return { ...base, type: type?.toLowerCase() || 'unknown' };
   }
 }
+
 
 // ═══════════════════════════════════════════════════════════════════════════════
 //  SECTION 3 — CORE AI HANDLER
