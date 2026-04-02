@@ -109,36 +109,8 @@ function normaliseForFraud(body) {
   const msgData     = body?.messageData;
   const type        = msgData?.typeMessage;
   const base        = { from: senderPhone };
-  // 1. First, normalize the incoming Green API payload
-  const normalizedMsg = normaliseForFraud(req.body);
-
-// 2. Route based on the NORMALIZED type, not the raw type
-if (normalizedMsg.type === 'text') {
-    
-    const incomingText = normalizedMsg.text.body;
-    console.log(`[Webhook] User said: ${incomingText}`);
-    
-    // -> Next Step: Pass incomingText to your AI Integration (processMessage)
-    
-} else if (normalizedMsg.type === 'image') {
-    
-    console.log("[Webhook] Received an image for vision matching");
-    // -> Next Step: Pass to matchSneakerFromImage
-    
-} else if (normalizedMsg.type === 'location') {
-    
-    console.log("[Webhook] Received live location for fraud check");
-    // -> Next Step: Pass to locationVerifier.js
-    
-} else {
-    // 3. Fallback for stickers, reactions, etc.
-    console.log("[Webhook] Unsupported type — sending reply");
-    await sendText(normalizedMsg.from, "Sorry, I can only handle text messages, voice notes 🎙️, and images 📸. Please type your question!");
-}
-
 
   switch (type) {
-    // FIX: Changed to match Green API's exact camelCase payloads
     case 'textMessage':
     case 'extendedTextMessage': {
       const textBody =
@@ -158,7 +130,6 @@ if (normalizedMsg.type === 'text') {
       return {
         ...base,
         type: 'video',
-        // Note: Ensure your Green API instance is configured to include download URLs in webhooks
         video: { id: msgData?.fileMessageData?.downloadUrl },
       };
     }
@@ -374,30 +345,31 @@ router.post('/', verifyGreenApiToken, async (req, res) => {
   logger.info('[Webhook] Routing', { senderPhone, typeMessage });
 
   try {
+    // FIX: All cases updated to strictly match Green API's camelCase strings
     switch (typeMessage) {
-      case 'TextMessage':
-      case 'ExtendedTextMessage':
+      case 'textMessage':
+      case 'extendedTextMessage':
         await handleTextMessage(messageData, senderPhone, body);
         break;
 
-      case 'AudioMessage':
-      case 'PTTMessage':
+      case 'audioMessage':
+      case 'pttMessage': // Keep this just in case, though Green API usually sends audioMessage
         await handleAudioMessage(messageData, senderPhone);
         break;
 
-      case 'ImageMessage':
+      case 'imageMessage':
         await handleImageMessage(messageData, senderPhone);
         break;
 
-      case 'LocationMessage':
+      case 'locationMessage':
         await handleLocationMessage(body, senderPhone);
         break;
 
-      case 'VideoMessage':
+      case 'videoMessage':
         await handleVideoMessage(body, senderPhone);
         break;
 
-      case 'ReactionMessage':
+      case 'reactionMessage':
         logger.info('[Webhook] Reaction — no action', { senderPhone });
         break;
 
@@ -425,3 +397,4 @@ router.get('/health', (_req, res) => {
 });
 
 module.exports = router;
+
