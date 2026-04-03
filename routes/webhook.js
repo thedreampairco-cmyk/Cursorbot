@@ -187,14 +187,17 @@ async function processTextWithAI(userText, senderPhone) {
   }
 
   // ── Get AI response ───────────────────────────────────────────────────────
-  const aiReply = await processMessage(prompt);
+  const aiResult = await processMessage(prompt);
+  
+  // Extract the actual string from the object
+  const aiReplyText = aiResult.reply;
 
   // ── Save to history and persist ───────────────────────────────────────────
-  client.addMessage('assistant', aiReply);
+  client.addMessage('assistant', aiReplyText);
   await client.save();
 
   // ── Send reply via Green API ──────────────────────────────────────────────
-  await sendText(senderPhone, aiReply);
+  await sendText(senderPhone, aiReplyText);
 
   logger.info('[Webhook] AI reply sent', {
     senderPhone,
