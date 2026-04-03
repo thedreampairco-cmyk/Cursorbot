@@ -65,12 +65,41 @@ Rules:
  * @param {number}      [options.temperature]
  * @returns {Promise<string>}
  */
+/**
+ * Generate a conversational response using the Maya persona.
+ * FIXED: Sanitizes all message content fields to strings before the API call.
+ */
 async function generateResponse(messages, systemPrompt = null, options = {}) {
   const {
     model       = MODELS.chat,
     maxTokens   = DEFAULTS.maxTokensChat,
     temperature = DEFAULTS.temperature,
   } = options;
+
+  // ── CRITICAL FIX ────────────────────────────────────────────────────────────
+  // Groq requires every message.content to be a plain string.
+  // Coerce any object that slipped through (e.g. a full result object stored in history).
+  const sanitizedMessages = messages.map((m) => {
+    if (typeof m.content === "string") return m;
+
+    let coerced;
+    if (m.content && typeof m.content === "object") {
+      coerced =
+        typeof m.content.reply    === "string" ? m.content.reply    :
+        typeof m.content.response === "string" ? m.content.response :
+        JSON.stringify(m.content);
+    } else {
+      coerced = String(m.content ?? "");
+    }
+
+    logger.warn(
+      `[Groq] generateResponse: message.content was not a string (role="${m.role}"). ` +
+      `Coerced to: "${coerced.slice(0, 80)}"`
+    );
+
+    return { ...m, content: coerced };
+  });
+  // ── END FIX ─────────────────────────────────────────────────────────────────
 
   try {
     const completion = await groq.chat.completions.create({
@@ -79,7 +108,7 @@ async function generateResponse(messages, systemPrompt = null, options = {}) {
       temperature,
       messages: [
         { role: "system", content: systemPrompt || MAYA_SYSTEM_PROMPT },
-        ...messages,
+        ...sanitizedMessages,
       ],
     });
 
@@ -94,7 +123,6 @@ async function generateResponse(messages, systemPrompt = null, options = {}) {
     throw new AppError(`LLM generation failed: ${err.message}`, 502, "LLM_FAILED");
   }
 }
-
 // ═══════════════════════════════════════════════════════════════════════════════
 // VISION
 // ═══════════════════════════════════════════════════════════════════════════════

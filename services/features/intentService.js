@@ -47,10 +47,46 @@ const VALID_INTENTS = [
   "unknown",
 ];
 
-// ─── Context Builder ──────────────────────────────────────────────────────────
+/**
+ * Append a message to the phone's session history (max 20 entries retained).
+ * FIXED: Coerces text to string before storage — prevents object bleed into Groq content field.
+ * @param {string} phone
+ * @param {"user"|"assistant"} role
+ * @param {string|object} text
+ */
+function _appendHistory(phone, role, text) {
+  const session = getSession(phone) || {};
+  const history = Array.isArray(session.history) ? session.history : [];
+
+  // ── CRITICAL FIX ──────────────────────────────────────────────────────────
+  // If a handler accidentally returns an object (e.g. { reply, intents, products })
+  // and the caller passes result instead of result.response, coerce it safely.
+  let safeText;
+  if (typeof text === "string") {
+    safeText = text;
+  } else if (text && typeof text === "object") {
+    // Extract the reply field if it exists, otherwise stringify the whole thing
+    safeText =
+      typeof text.reply    === "string" ? text.reply    :
+      typeof text.response === "string" ? text.response :
+      JSON.stringify(text);
+    logger.warn(
+      `[Intent] _appendHistory received an object instead of a string for role="${role}". ` +
+      `Extracted: "${safeText.slice(0, 60)}..."`
+    );
+  } else {
+    safeText = String(text ?? "");
+  }
+  // ── END FIX ───────────────────────────────────────────────────────────────
+
+  history.push({ role, text: safeText, ts: Date.now() });
+  if (history.length > 20) history.splice(0, history.length - 20);
+  updateSession(phone, { ...session, history });
+}
 
 /**
  * Build a 2-turn prior context array from the session for intent classification.
+ * FIXED: Sanitizes each entry to guarantee string output.
  * @param {string} phone
  * @returns {string[]}
  */
@@ -58,22 +94,16 @@ function _buildPriorContext(phone) {
   const session = getSession(phone);
   if (!session || !Array.isArray(session.history)) return [];
   return session.history
-    .slice(-4) // last 2 turns (user + assistant each)
-    .map((h) => `${h.role === "user" ? "Customer" : "Maya"}: ${h.text}`);
-}
-
-/**
- * Append a message to the phone's session history (max 20 entries retained).
- * @param {string} phone
- * @param {"user"|"assistant"} role
- * @param {string}             text
- */
-function _appendHistory(phone, role, text) {
-  const session = getSession(phone) || {};
-  const history = Array.isArray(session.history) ? session.history : [];
-  history.push({ role, text, ts: Date.now() });
-  if (history.length > 20) history.splice(0, history.length - 20);
-  updateSession(phone, { ...session, history });
+    .slice(-4)
+    .map((h) => {
+      // ── CRITICAL FIX ──────────────────────────────────────────────────────
+      const text =
+        typeof h.text === "string"   ? h.text :
+        typeof h.text === "object"   ? (h.text?.reply || h.text?.response || JSON.stringify(h.text)) :
+        String(h.text ?? "");
+      // ── END FIX ───────────────────────────────────────────────────────────
+      return `${h.role === "user" ? "Customer" : "Maya"}: ${text}`;
+    });
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
