@@ -8,7 +8,7 @@ const INSTANCE_ID = process.env.GREEN_API_INSTANCE_ID;
 const TOKEN       = process.env.GREEN_API_TOKEN;
 
 if (!INSTANCE_ID || !TOKEN) {
-  throw new Error("GREEN_API_INSTANCE_ID and GREEN_API_TOKEN must be set.");
+  console.error("⚠️  WARNING: Green API credentials missing. WhatsApp messaging will fail."); return;
 }
 
 const BASE = `https://api.green-api.com/waInstance${INSTANCE_ID}`;
