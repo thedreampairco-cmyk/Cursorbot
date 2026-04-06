@@ -174,20 +174,10 @@ async function processTextWithAI(userText, senderPhone) {
 
   // ── Build context-aware prompt ────────────────────────────────────────────
   // Include last N turns so Maya remembers the conversation
-  const recentMessages = client.messages.slice(-(MAX_HISTORY_TURNS * 2));
-  const hasHistory = recentMessages.length > 1;
-
-  let prompt = userText;
-  if (hasHistory) {
-    const historyText = recentMessages
-      .slice(0, -1) // exclude the message we just added
-      .map((m) => `${m.role === 'user' ? 'Customer' : 'Maya'}: ${m.content}`)
-      .join('\n');
-    prompt = `Previous conversation:\n${historyText}\n\nCustomer: ${userText}`;
   }
 
   // ── Get AI response ───────────────────────────────────────────────────────
-  const aiResult = await processMessage(senderPhone, prompt);
+  const aiResult = await processMessage(senderPhone, userText);
   
   // Extract the actual string from the object
   const aiReplyText = aiResult.response || "Sorry, I could not process that.";
