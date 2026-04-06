@@ -124,7 +124,7 @@ function _buildPriorContext(phone) {
  * }>}
  */
 async function extractIntent(phone, message) {
-  const trimmed = message.trim();
+  const trimmed = message.trim() || "";
 
   // ── Fast-path heuristics (no LLM call needed) ──
   const lower = trimmed.toLowerCase();
