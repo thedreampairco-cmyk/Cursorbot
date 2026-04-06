@@ -172,11 +172,6 @@ async function processTextWithAI(userText, senderPhone) {
   client.addMessage('user', userText);
   client.lastMessageAt = new Date();
 
-  // ── Build context-aware prompt ────────────────────────────────────────────
-  // Include last N turns so Maya remembers the conversation
-  }
-
-  // ── Get AI response ───────────────────────────────────────────────────────
   const aiResult = await processMessage(senderPhone, userText);
   
   // Extract the actual string from the object
