@@ -319,11 +319,13 @@ async function handleSizeHelp(phone, entities, language) {
   }
 
   const userContent =
-    `Customer needs sizing help. ${productContext}` +
-    `${entities.size ? `They mentioned size "${entities.size}". ` : ""}` +
-    `Provide a friendly sizing guide (Indian, UK, EU equivalents if relevant), ` +
-    `mention fit advice for sneakers, and invite them to select a size. ` +
-    `${language === "hi" ? "Reply in Hindi/Hinglish." : ""} Under 120 words.`;
+  `Customer is discussing sizing. ${productContext}` +
+  `${entities.size ? \`They mentioned size "\${entities.size}". \` : ""}` +
+  `RULES:\n` +
+  `1. If they provide a size (e.g., "7"), confirm it and ask to add to cart.\n` +
+  `2. If they say "No", assume they are happy with the current selection and move to checkout.\n` +
+  `3. ONLY provide a size chart if explicitly asked.\n` +
+  `${language === "hi" ? "Reply in Hindi/Hinglish." : ""} Under 60 words.`;
 
   const response = await _generate(phone, userContent, language);
   return { response, availableSizes };
