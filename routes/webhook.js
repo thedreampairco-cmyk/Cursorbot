@@ -257,7 +257,8 @@ async function handleImageMessage(messageData, senderPhone) {
 
   // Option B: Caption provided
   if (caption) {
-    await processTextWithAI(caption, senderPhone);
+    const fallbackPrompt = `[System: Customer attached an image but the server failed to process the media]. Customer caption: "${caption}". Politely explain that you couldn't see the image and ask them to send it again.`;
+    await processTextWithAI(fallbackPrompt, senderPhone);
     return;
   }
 
