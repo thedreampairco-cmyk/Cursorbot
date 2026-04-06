@@ -520,7 +520,25 @@ async function verifySneakerIdentity(imageInput, sku) {
   }
 }
 
+
+/**
+ * Wrapper function to bridge Green API webhook with the vision AI
+ */
+async function getVisionAnalysis(downloadUrl) {
+  try {
+    const buffer = await fetchIncomingMedia(downloadUrl);
+    const dataUri = _bufferToDataUri(buffer, "image/jpeg");
+    const analysis = await analyseImage(dataUri);
+    const description = buildSearchDescription(analysis);
+    return description.trim() ? description : "a sneaker";
+  } catch (err) {
+    logger.error("[Vision] getVisionAnalysis failed: " + err.message);
+    throw err;
+  }
+}
+
 module.exports = {
+  getVisionAnalysis,
   // Image Acquisition
   downloadWhatsAppImage,
   fetchPublicImage,
