@@ -187,10 +187,10 @@ async function processTextWithAI(userText, senderPhone) {
   }
 
   // ── Get AI response ───────────────────────────────────────────────────────
-  const aiResult = await processMessage(prompt);
+  const aiResult = await processMessage(senderPhone, prompt);
   
   // Extract the actual string from the object
-  const aiReplyText = aiResult.reply;
+  const aiReplyText = aiResult.response || "Sorry, I could not process that.";
 
   // ── Save to history and persist ───────────────────────────────────────────
   client.addMessage('assistant', aiReplyText);
@@ -201,7 +201,7 @@ async function processTextWithAI(userText, senderPhone) {
 
   logger.info('[Webhook] AI reply sent', {
     senderPhone,
-    replyPreview: aiReply.slice(0, 80),
+    replyPreview: aiReplyText.slice(0, 80),
   });
 }
 
