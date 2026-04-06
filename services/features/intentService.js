@@ -131,6 +131,14 @@ async function extractIntent(phone, message) {
   // ── Fast-path heuristics (no LLM call needed) ──
   const lower = trimmed.toLowerCase();
 
+  if (trimmed.startsWith("Image analysis:")) {
+    return { intent: "search_product", confidence: 1.0, entities: _emptyEntities(), language: "en" };
+  }
+
+  if (trimmed.startsWith('Image analysis:')) {
+    return { intent: 'search_product', confidence: 1.0, entities: _emptyEntities(), language: 'en' };
+  }
+
   if (/^(hi|hello|hey|hii+|namaste|namaskar|jai hind)[\s!]*$/i.test(trimmed)) {
     return { intent: "greeting", confidence: 1.0, entities: _emptyEntities(), language: "en" };
   }
