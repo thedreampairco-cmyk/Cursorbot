@@ -1,6 +1,18 @@
 // services/features/visionRecognition.js
 "use strict";
 
+async function _downloadCleanMedia(url) {
+  try {
+    const res = await fetch(url);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    return Buffer.from(await res.arrayBuffer());
+  } catch (err) {
+    logger.error("[Vision] Clean fetch failed: " + err.message);
+    throw err;
+  }
+}
+
+
 const { logger, AppError }           = require("../../errorHandler");
 const {
   analyzeSneakerImage,
@@ -129,7 +141,7 @@ async function downloadWhatsAppImage(chatIdStr, idMessage) {
  */
 async function fetchPublicImage(imageUrl) {
   try {
-    const buffer = await fetchIncomingMedia(imageUrl);
+    const buffer = await _downloadCleanMedia(imageUrl);
     // Naive MIME detection from URL extension
     const ext      = imageUrl.split("?")[0].split(".").pop().toLowerCase();
     const mimeMap  = { jpg: "image/jpeg", jpeg: "image/jpeg", png: "image/png", webp: "image/webp" };
