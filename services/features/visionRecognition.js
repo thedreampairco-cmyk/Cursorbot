@@ -528,15 +528,21 @@ async function verifySneakerIdentity(imageInput, sku) {
  */
 async function getVisionAnalysis(downloadUrl) {
   try {
-    const buffer = await fetchIncomingMedia(downloadUrl);
+    console.log('🌐 Downloading directly, bypassing GreenAPI wrappers...');
+    const res = await fetch(downloadUrl);
+    if (!res.ok) {
+       throw new Error(`Download failed: HTTP ${res.status} ${res.statusText}`);
+    }
+    const buffer = Buffer.from(await res.arrayBuffer());
     const dataUri = _bufferToDataUri(buffer, "image/jpeg");
     const analysis = await analyseImage(dataUri);
     const description = buildSearchDescription(analysis);
     return description.trim() ? description : "a sneaker";
   } catch (err) {
-    logger.error("[Vision] getVisionAnalysis failed: " + err.message);
+    console.error("[Vision] getVisionAnalysis failed:", err.message);
     throw err;
   }
+}
 }
 
 module.exports = {
