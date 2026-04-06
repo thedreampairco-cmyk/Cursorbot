@@ -234,6 +234,10 @@ async function handleAudioMessage(messageData, senderPhone) {
 async function handleImageMessage(messageData, senderPhone) {
   const downloadUrl = messageData?.fileMessageData?.downloadUrl;
   const caption     = messageData?.fileMessageData?.caption?.trim() || '';
+  console.log('🛑 DEBUG CHECK:');
+  console.log('- Vision function loaded:', !!getVisionAnalysis);
+  console.log('- Download URL:', downloadUrl);
+  console.log('- Raw File Data:', JSON.stringify(messageData?.fileMessageData, null, 2));
 
   logger.info('[Webhook] Image received', {
     senderPhone,
