@@ -555,7 +555,7 @@ async function getVisionAnalysis(downloadUrl) {
     throw err;
   }
 }
-}
+
 
 module.exports = {
   getVisionAnalysis,
