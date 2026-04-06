@@ -301,7 +301,6 @@ async function handleSizeHelp(phone, entities, language) {
   let availableSizes = [];
   let productContext = "";
 
-  // Try to get sizes from a known SKU (from entities or last search)
   let sku = entities.sku;
   if (!sku) {
     const state = getConversationState(phone);
@@ -312,20 +311,20 @@ async function handleSizeHelp(phone, entities, language) {
     const product = await getProductBySku(sku);
     if (product) {
       availableSizes = await getAvailableSizes(sku);
-      productContext =
-        `Product: ${product.brand} ${product.name} | ` +
-        `Available sizes: ${availableSizes.join(", ") || "currently out of stock"}. `;
+      productContext = `Product: ${product.brand} ${product.name} | Available sizes: ${availableSizes.join(", ") || "out of stock"}. `;
     }
   }
 
+  const sizeText = entities.size ? `They mentioned size "${entities.size}". ` : "";
+
   const userContent =
-  `Customer is discussing sizing. ${productContext}` +
-  `${entities.size ? \`They mentioned size "\${entities.size}". \` : ""}` +
-  `RULES:\n` +
-  `1. If they provide a size (e.g., "7"), confirm it and ask to add to cart.\n` +
-  `2. If they say "No", assume they are happy with the current selection and move to checkout.\n` +
-  `3. ONLY provide a size chart if explicitly asked.\n` +
-  `${language === "hi" ? "Reply in Hindi/Hinglish." : ""} Under 60 words.`;
+    `Customer is discussing sizing. ${productContext}` +
+    sizeText +
+    `RULES:\n` +
+    `1. If they provide a size (e.g., "7"), confirm it and ask to add to cart.\n` +
+    `2. If they say "No", assume they are happy with the current selection and move to checkout.\n` +
+    `3. ONLY provide a size chart if explicitly asked.\n` +
+    `${language === "hi" ? "Reply in Hindi/Hinglish." : ""} Under 60 words.`;
 
   const response = await _generate(phone, userContent, language);
   return { response, availableSizes };
