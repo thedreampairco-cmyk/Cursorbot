@@ -5,7 +5,7 @@ const Groq               = require("groq-sdk");
 const { logger, AppError } = require("../errorHandler");
 
 if (!process.env.GROQ_API_KEY) {
-  throw new Error("GROQ_API_KEY must be set.");
+  console.error("❌ CRITICAL: GROQ_API_KEY is missing. AI features will fail."); return null;
 }
 
 const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
