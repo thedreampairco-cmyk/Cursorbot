@@ -91,7 +91,9 @@ async function downloadWhatsAppImage(chatIdStr, idMessage) {
     }
 
     // Step 2: download the binary
-    const buffer = await fetchIncomingMedia(downloadUrl);
+    const res = await fetch(downloadUrl);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const buffer = Buffer.from(await res.arrayBuffer());
 
     if (buffer.byteLength > MAX_IMAGE_BYTES) {
       throw new AppError(
