@@ -507,8 +507,8 @@ async function processMessage(phone, message) {
       result = await handleSizeHelp(phone, entities, language);
       break;
 
-    case "add_to_cart":
-      ({ response } = await handleAddToCart(phone, entities, language));
+        case "add_to_cart":
+      result = await handleAddToCart(phone, entities, language);
       break;
 
     case "view_cart":
