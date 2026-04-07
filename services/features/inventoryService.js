@@ -78,14 +78,29 @@ async function getProductsByCategory(category) {
  * @returns {Promise<object[]>}
  */
 async function searchProducts(query) {
-  const catalog = await getCatalog();
-  const terms   = query.toLowerCase().split(/\s+/).filter(Boolean);
-  return catalog.filter((p) => {
-    const haystack = [p.brand, p.name, p.category, p.description]
-      .join(" ")
-      .toLowerCase();
-    return terms.every((term) => haystack.includes(term));
-  });
+  try {
+    const catalog = await getCatalog();
+    logger.info(`[Debug] Total catalog size: ${catalog.length}`);
+    
+    if (catalog.length > 0) {
+      logger.info(`[Debug] Sample item: ${catalog[0].brand} - ${catalog[0].name}`);
+    }
+
+    const terms = query.toLowerCase().split(' ').filter(t => t.length > 2);
+    logger.info(`[Debug] Searching for terms: ${terms.join(', ')}`);
+    
+    const results = catalog.filter(p => {
+      // Create a giant searchable string from the product
+      const target = `${p.brand || ''} ${p.name || ''} ${p.category || ''}`.toLowerCase();
+      return terms.every(term => target.includes(term));
+    });
+
+    logger.info(`[Debug] Found ${results.length} matches.`);
+    return results;
+  } catch (err) {
+    logger.error("[Inventory] Search failed: " + err.message);
+    return [];
+  }
 }
 
 /**
