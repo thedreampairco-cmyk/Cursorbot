@@ -1,8 +1,8 @@
 // services/features/intentService.js
 "use strict";
 
-const { logger }
-const { getVisionAnalysis } = require("./visionRecognition");                   = require("../../errorHandler");
+const { logger } = require("../../errorHandler");
+const { getVisionAnalysis } = require("./visionRecognition");
 const {
   classifyIntent,
   detectLanguage,
@@ -503,11 +503,12 @@ async function processMessage(phone, message) {
       result = await handleSearchProduct(phone, message, entities, language);
       break;
 
-    case "size_help":
+        case "size_help":
+      result = await handleSizeHelp(phone, entities, language);
+      break;
+
     case "add_to_cart":
       ({ response } = await handleAddToCart(phone, entities, language));
-      break;
-      result = await handleSizeHelp(phone, entities, language);
       break;
 
     case "view_cart":
