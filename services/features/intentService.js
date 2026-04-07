@@ -1,7 +1,8 @@
 // services/features/intentService.js
 "use strict";
 
-const { logger }                   = require("../../errorHandler");
+const { logger }
+const { getVisionAnalysis } = require("./visionRecognition");                   = require("../../errorHandler");
 const {
   classifyIntent,
   detectLanguage,
@@ -24,6 +25,8 @@ const {
   getCart,
   formatCartMessage,
   getCartTotal,
+  addToCart,
+  removeFromCart,
   getUserPrefs,
   setUserPrefs,
 }                                  = require("../memoryStore");
@@ -501,6 +504,9 @@ async function processMessage(phone, message) {
       break;
 
     case "size_help":
+    case "add_to_cart":
+      ({ response } = await handleAddToCart(phone, entities, language));
+      break;
       result = await handleSizeHelp(phone, entities, language);
       break;
 
@@ -630,6 +636,31 @@ function _mergeEntities(raw) {
 function _guessLang(lower) {
   const hindiWords = ["karo", "mera", "hai", "nahi", "kuch", "bata", "kitna", "konsa", "ek"];
   return hindiWords.some((w) => lower.includes(w)) ? "hi" : "en";
+}
+
+
+async function handleAddToCart(phone, entities, language) {
+  try {
+    const state = getConversationState(phone);
+    let sku = entities.sku || state?.payload?.lastSelectedSku;
+    let size = entities.size;
+
+    if (!sku) return { response: await _generate(phone, "Ask the user which shoe they want to add.", language) };
+    if (!size) return { response: await _generate(phone, "Ask the user what size they need for " + sku, language) };
+
+    const product = await getProductBySku(sku);
+    if (!product) throw new Error("Product not found");
+
+    addToCart(phone, { sku, size, name: product.name, price: product.price });
+    updateConversationPayload(phone, { lastSelectedSku: sku });
+
+    const prompt = `Confirm that ${product.name} (Size ${size}) was added to cart. Ask if they want to 'Checkout' or 'Keep Shopping'.`;
+    const response = await _generate(phone, prompt, language);
+    return { response, cartUpdated: true };
+  } catch (err) {
+    logger.error("[Intent] handleAddToCart failed: " + err.message);
+    return { response: "Sorry, I had trouble adding that to your cart. Try again?" };
+  }
 }
 
 module.exports = {
