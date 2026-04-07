@@ -41,27 +41,19 @@ function buildColumnIndex(headers) {
   return index;
 }
 
-function parseRow(row, colIndex) {
-  const get = (field) => {
-    const col = colIndex[field];
-    return col ? (row[col] || '').toString().trim() : '';
+function parseRow(row, headers) {
+  const getVal = (names) => {
+    const idx = headers.findIndex(h => names.includes(h.toLowerCase().trim()));
+    return idx !== -1 ? row[idx] : null;
   };
-
-  const imageUrl = get('imageUrl');
-  const stock = parseInt(get('stock') || '0', 10);
-
   return {
-    id: get('id'),
-    name: get('name'),
-    brand: get('brand'),
-    category: get('category'),
-    price: parseFloat(get('price') || '0'),
-    sizes: get('sizes'),
-    color: get('color'),
-    stock: isNaN(stock) ? 0 : stock,
-    description: get('description'),
-    imageUrl: imageUrl || null,   // ONLY from sheet – never constructed
-    inStock: stock > 0,
+    sku: getVal(['sku', 'id', 'article']),
+    brand: getVal(['brand', 'company', 'make']),
+    name: getVal(['name', 'title', 'product', 'model']),
+    category: getVal(['category', 'type']),
+    price: parseFloat(String(getVal(['price', 'mrp', 'cost'])).replace(/[^0-9.]/g, '')) || 0,
+    stock: parseInt(getVal(['stock', 'inventory', 'qty'])) || 0,
+    description: getVal(['description', 'details', 'about']) || ""
   };
 }
 
