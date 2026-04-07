@@ -258,48 +258,45 @@ async function handleBrowseCatalog(phone, language) {
  * @returns {Promise<{ response: string, products: object[] }>}
  */
 async function handleSearchProduct(phone, message, entities, language) {
-  // Build search query from entities + raw message
-  const queryParts = [
-    entities.brand,
-    entities.category,
-    entities.model,
-    message,
-  ].filter(Boolean);
-  const query    = queryParts.join(" ");
-  const products = await searchProducts(query);
+  try {
+    const queryParts = [entities.brand, entities.category, entities.model, message].filter(Boolean);
+    const query = queryParts.join(" ");
+    const products = await searchProducts(query);
 
-  if (products.length === 0) {
-    const userContent =
-      `Customer searched for "${query}" but no products were found in the catalog. ` +
-      `Apologise warmly, suggest they browse categories or send an image instead. ` +
-      `${language === "hi" ? "Reply in Hindi/Hinglish." : ""}`;
+    if (products.length === 0) {
+      const response = await _generate(phone, `Customer searched for "${query}" but no products found. Apologise warmly.`, language);
+      return { response, products: [] };
+    }
+
+    const top3 = products.slice(0, 3);
+    const productList = top3.map((p, i) => `${i + 1}. *${p.brand} ${p.name}* | ₹${p.price} | SKU: ${p.sku}`).join("\n");
+
+    // 🚀 NEW: Import WhatsApp wrapper and fire images BEFORE the text response
+    const wa = require("../../whatsappService");
+    for (const p of top3) {
+      const imgUrl = p.imageUrl || p.image || p.url || p.photo; // Look for image field
+      if (imgUrl) {
+         try {
+           await wa.sendImage(phone, imgUrl, `*${p.brand} ${p.name}*\n₹${p.price}`);
+         } catch(e) {
+           logger.error("[Search] Failed to send image for " + p.sku);
+         }
+      }
+    }
+
+    const userContent = `Found ${products.length} result(s) for "${query}". Top 3:\n${productList}\n\nEnthusiastically present these, mention stock, and ask for their size. Under 100 words.`;
     const response = await _generate(phone, userContent, language);
-    return { response, products: [] };
+    
+    // 🧠 NEW: Force Maya to remember the first shoe in case they instantly say "Add size 9"
+    if (top3[0]) updateConversationPayload(phone, { lastSelectedSku: top3[0].sku });
+    
+    return { response, products: top3 };
+  } catch (err) {
+    logger.error("[Intent] Search Error: " + err.message);
+    return { response: "Sorry, I had trouble searching the catalog just now. Please try again." };
   }
-
-  const top3        = products.slice(0, 3);
-  const productList = top3
-    .map((p, i) => `${i + 1}. *${p.brand} ${p.name}* | ₹${p.price.toLocaleString("en-IN")} | SKU: ${p.sku}`)
-    .join("\n");
-
-  const userContent =
-    `Customer searched for "${query}". Found ${products.length} result(s). Showing top 3:\n${productList}\n\n` +
-    `Present these results enthusiastically, mention stock availability, and invite size selection. ` +
-    `${language === "hi" ? "Reply in Hindi/Hinglish." : ""} Under 120 words.`;
-
-  const response = await _generate(phone, userContent, language);
-
-  updateConversationPayload(phone, { lastSearchResults: top3.map((p) => p.sku) });
-  return { response, products: top3 };
 }
 
-/**
- * Handle 'size_help' intent — provide size guidance for a specific product or general chart.
- * @param {string} phone
- * @param {object} entities  - { sku, brand, size }
- * @param {string} language
- * @returns {Promise<{ response: string, availableSizes?: string[] }>}
- */
 async function handleSizeHelp(phone, entities, language) {
   let availableSizes = [];
   let productContext = "";
