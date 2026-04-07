@@ -80,19 +80,21 @@ async function getProductsByCategory(category) {
 async function searchProducts(query) {
   try {
     const catalog = await getCatalog();
-    logger.info(`[Debug] Total catalog size: ${catalog.length}`);
     
-    if (catalog.length > 0) {
-      logger.info(`[Debug] Sample item: ${catalog[0].brand} - ${catalog[0].name}`);
-    }
-
-    const terms = query.toLowerCase().split(' ').filter(t => t.length > 2);
-    logger.info(`[Debug] Searching for terms: ${terms.join(', ')}`);
+    // 1. Strip conversational filler words
+    const stopWords = ['do','you','have','i','want','looking','for','is','there','a','an','any','show','me','some','please'];
+    const terms = query.toLowerCase()
+                       .replace(/[^a-z0-9\s]/g, '') // remove punctuation
+                       .split(' ')
+                       .filter(t => t.length > 2 && !stopWords.includes(t));
+                       
+    logger.info(`[Debug] Clean search terms: ${terms.join(', ')}`);
     
     const results = catalog.filter(p => {
-      // Create a giant searchable string from the product
-      const target = `${p.brand || ''} ${p.name || ''} ${p.category || ''}`.toLowerCase();
-      return terms.every(term => target.includes(term));
+      // 2. Search the entire JSON string of the product so we don't miss empty columns
+      const target = JSON.stringify(p).toLowerCase();
+      // 3. Ensure every real keyword is found somewhere in the product data
+      return terms.length > 0 && terms.every(term => target.includes(term));
     });
 
     logger.info(`[Debug] Found ${results.length} matches.`);
