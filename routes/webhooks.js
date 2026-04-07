@@ -33,7 +33,7 @@ const express = require("express");
 const router  = express.Router();
 
 const paymentService   = require("../services/paymentService");
-const whatsappService  = require("../services/whatsappService");
+const whatsappService  = require("../services/features/whatsappService");
 const inventoryService = require("../services/inventoryService");
 const { Order, PAYMENT_STATUS } = require("../models/Order");
 const { OutOfStockError }       = require("../models/Inventory");
