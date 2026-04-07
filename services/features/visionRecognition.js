@@ -19,7 +19,7 @@ const {
   matchSneakerFromCatalog,
   generateResponse,
   MAYA_SYSTEM_PROMPT,
-}                                    = require("../aiIntegration");
+}                                    = require("./aiIntegration");
 const {
   fetchIncomingMedia,
   getMediaDownloadUrl,
@@ -33,7 +33,7 @@ const {
   updateConversationPayload,
   setUserPrefs,
   getUserPrefs,
-}                                    = require("../memoryStore");
+}                                    = require("./memoryStore");
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 

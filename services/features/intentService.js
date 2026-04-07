@@ -8,7 +8,7 @@ const {
   detectLanguage,
   generateResponse,
   MAYA_SYSTEM_PROMPT,
-}                                  = require("../aiIntegration");
+}                                  = require("./aiIntegration");
 const {
   searchProducts,
   getProductBySku,
@@ -29,7 +29,7 @@ const {
   removeFromCart,
   getUserPrefs,
   setUserPrefs,
-}                                  = require("../memoryStore");
+}                                  = require("./memoryStore");
 
 // ─── Intent Definitions ───────────────────────────────────────────────────────
 
@@ -272,7 +272,7 @@ async function handleSearchProduct(phone, message, entities, language) {
     const productList = top3.map((p, i) => `${i + 1}. *${p.brand} ${p.name}* | ₹${p.price} | SKU: ${p.sku}`).join("\n");
 
     // 🚀 NEW: Import WhatsApp wrapper and fire images BEFORE the text response
-    const wa = require("../whatsappService");
+    const wa = require("./whatsappService");
     for (const p of top3) {
       const imgUrl = p.imageUrl || p.image || p.url || p.photo; // Look for image field
       if (imgUrl) {
