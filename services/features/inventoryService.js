@@ -80,24 +80,38 @@ async function getProductsByCategory(category) {
 async function searchProducts(query) {
   try {
     const catalog = await getCatalog();
+    logger.info(`[Debug] Total catalog size: ${catalog.length}`);
+
+    // 1. Clean the vision description or user query
+    const cleanQuery = query.toLowerCase().replace(/[^a-z0-9 ]/g, ' ');
+    // Remove filler words that the Vision AI often uses
+    const ignoreWords = ['and', 'with', 'the', 'low', 'top', 'sneaker', 'shoe', 'shoes', 'accents', 'color', 'combo'];
+    const terms = cleanQuery.split(' ').filter(t => t.length > 2 && !ignoreWords.includes(t));
     
-    // 1. Strip conversational filler words
-    const stopWords = ['do','you','have','i','want','looking','for','is','there','a','an','any','show','me','some','please'];
-    const terms = query.toLowerCase()
-                       .replace(/[^a-z0-9\s]/g, '') // remove punctuation
-                       .split(' ')
-                       .filter(t => t.length > 2 && !stopWords.includes(t));
-                       
-    logger.info(`[Debug] Clean search terms: ${terms.join(', ')}`);
+    logger.info(`[Debug] Scoring search for terms: ${terms.join(', ')}`);
     
-    const results = catalog.filter(p => {
-      // 2. Search the entire JSON string of the product so we don't miss empty columns
-      const target = JSON.stringify(p).toLowerCase();
-      // 3. Ensure every real keyword is found somewhere in the product data
-      return terms.length > 0 && terms.every(term => target.includes(term));
+    // 2. Score every product in the database
+    const scoredCatalog = catalog.map(p => {
+      const target = `${p.brand || ''} ${p.name || ''} ${p.category || ''} ${p.description || ''}`.toLowerCase();
+      let score = 0;
+      
+      terms.forEach(term => {
+        if (target.includes(term)) score += 1;
+      });
+      
+      // Massive score boost if the brand matches perfectly
+      if (p.brand && terms.includes(p.brand.toLowerCase())) score += 5;
+      
+      return { product: p, score };
     });
 
-    logger.info(`[Debug] Found ${results.length} matches.`);
+    // 3. Filter out zero-scores and rank by highest score
+    const results = scoredCatalog
+      .filter(item => item.score > 0)
+      .sort((a, b) => b.score - a.score)
+      .map(item => item.product);
+
+    logger.info(`[Debug] Found ${results.length} matches based on relevance.`);
     return results;
   } catch (err) {
     logger.error("[Inventory] Search failed: " + err.message);
