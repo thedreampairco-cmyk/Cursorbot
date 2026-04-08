@@ -1,6 +1,6 @@
 'use strict';
 
-const memoryStore = require('../features/memoryStore');
+const memoryStore = require('../data/memoryStore');
 
 function buildSystemPrompt(client) {
   const catalog = memoryStore.getCatalog();
