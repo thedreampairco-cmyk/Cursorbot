@@ -53,6 +53,7 @@ async function runExpiryCheck() {
           productName:  order.product.name,
           paymentUrl:   order.razorpay.payment_link_url,
           minutesLeft,
+          tokenAmount:  order.razorpay.deposit_amount,
         });
 
         // Mark that reminder was sent to avoid sending it again next tick
