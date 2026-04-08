@@ -4,7 +4,7 @@ const { parse } = require('csv-parse/sync');
 const { sheetsClient } = require('../../config/api');
 const env = require('../../config/env');
 const { logger } = require('../../errorHandler');
-const memoryStore = require('../features/memoryStore');
+
 
 const COLUMN_MAP = {
   id:          ['id', 'product_id', 'sku'],
