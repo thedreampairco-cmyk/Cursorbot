@@ -142,7 +142,37 @@ async function extractIntent(phone, message) {
     return { intent: 'search_product', confidence: 1.0, entities: _emptyEntities(), language: 'en' };
   }
 
-  if (/^(hi|hello|hey|hii+|namaste|namaskar|jai hind)[\s!]*$/i.test(trimmed)) {
+  // "show me X image" / "X ka photo dikhao" → search_product, not image_search
+  const showImageMatch = lower.match(
+    /(?:show|send|dikhao|dikh|bhejo)\s+(?:me\s+)?(?:the\s+)?(.+?)\s+(?:image|photo|pic|picture|tasveer|photo dikhao)$/i
+  );
+  if (showImageMatch) {
+    const productQuery = showImageMatch[1].trim();
+    return {
+      intent:     "search_product",
+      confidence: 0.95,
+      entities:   { ..._emptyEntities(), query: productQuery },
+      language:   _guessLang(lower),
+    };
+  }
+
+  // Generic "show me X" / "dikhao X" → search_product
+  const showProductMatch = lower.match(
+    /^(?:show|dikhao|dikh|show me|mujhe dikhao)\s+(?:me\s+)?(?:the\s+)?(.+)$/i
+  );
+  if (showProductMatch) {
+    const productQuery = showProductMatch[1].trim();
+    if (productQuery.length > 2) {
+      return {
+        intent:     "search_product",
+        confidence: 0.9,
+        entities:   { ..._emptyEntities(), query: productQuery },
+        language:   _guessLang(lower),
+      };
+    }
+  }
+
+    if (/^(hi|hello|hey|hii+|namaste|namaskar|jai hind)[\s!]*$/i.test(trimmed)) {
     return { intent: "greeting", confidence: 1.0, entities: _emptyEntities(), language: "en" };
   }
   if (/^(bye|goodbye|tata|alvida|ok bye|thanks? bye)[\s!]*$/i.test(trimmed)) {
