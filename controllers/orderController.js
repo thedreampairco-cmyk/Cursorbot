@@ -8,7 +8,7 @@ const { v4: uuidv4 }            = require("uuid");
 const { Order, PAYMENT_STATUS } = require("../models/Order");
 const paymentService            = require("../services/paymentService");
 const whatsappService           = require("../services/whatsappService");
-const inventoryService          = require("../services/inventoryService");
+const inventoryService          = require("../services/features/inventoryService");
 
 /**
  * Creates a new COD order and initiates the full token payment UX sequence:
