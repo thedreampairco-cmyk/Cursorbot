@@ -9,7 +9,7 @@ const {
   deductStock,
   isInStock,
 }                                  = require("../googleSheets");
-const { sendLowStockAlert }        = require("../whatsapp/whatsappService");
+const { sendLowStockAlert }        = require("./whatsappService");
 const { getUserPrefs }             = require("./memoryStore");
 
 // ─── In-Process Catalog Cache ─────────────────────────────────────────────────
