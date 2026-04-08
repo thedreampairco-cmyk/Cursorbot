@@ -57,4 +57,7 @@ const OrderSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
+const userSchema = new mongoose.Schema({
+  // ... your user fields (name, phone, etc.)
+});
 module.exports = mongoose.models.User || mongoose.model('User', UserSchema);
