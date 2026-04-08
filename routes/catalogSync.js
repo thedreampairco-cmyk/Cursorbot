@@ -5,7 +5,7 @@ const router = express.Router();
 const cron = require('node-cron');
 const { asyncHandler, logger } = require('../errorHandler');
 const { fetchAndSyncCatalog } = require('../services/data/googleSheetsFetch');
-const memoryStore = require('../services/data/memoryStore');
+const memoryStore = require('../services/features/memoryStore');
 const env = require('../config/env');
 
 // ── Auth middleware ───────────────────────────────────────────────────────────
