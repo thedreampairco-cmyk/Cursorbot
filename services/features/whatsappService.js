@@ -93,7 +93,7 @@ async function sendPaymentLink(to, { paymentUrl, productName, expiresMinutes }) 
  */
 async function sendTokenConfirmation(to, { productName, orderId, codBalance }) {
   const message =
-    `✅ *₹500 received. You're locked in!*\n\n` +
+    `✅ *₹${tokenAmount} received. You're locked in!*\n\n` +
     `Your *${productName}* is heading to the packing table right now. 🚀\n\n` +
     `📦 *Order ID:* \`${orderId}\`\n` +
     `💵 *Balance at door (COD):* ₹${codBalance}\n\n` +
