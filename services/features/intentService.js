@@ -295,6 +295,12 @@ async function handleSearchProduct(phone, message, entities, language) {
     const queryParts = [entities.brand, entities.category, entities.model, message].filter(Boolean);
     const query = queryParts.join(" ");
     const products = await searchProducts(query);
+    if (products.length > 0) {
+      const wa = require('./whatsappService');
+      for (const p of products.slice(0, 3)) {
+        if (p.imgUrl) await wa.sendImage(phone, p.imgUrl, `*${p.brand} ${p.name}*\n₹${p.price}`);
+      }
+    }
 
     if (products.length === 0) {
       const response = await _generate(phone, `Customer searched for "${query}" but no products found. Apologise warmly.`, language);
