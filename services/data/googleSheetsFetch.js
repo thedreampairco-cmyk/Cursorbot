@@ -77,7 +77,7 @@ async function fetchAndSyncCatalog() {
     const products = records
       .map((row) => parseRow(row, colIndex))
       .filter((p) => p.sku && p.name);
-    memoryStore.setCatalog(products);
+    
     logger.info('[Sheets] Catalog synced - ' + products.length + ' products loaded');
     return products;
   } catch (err) {
