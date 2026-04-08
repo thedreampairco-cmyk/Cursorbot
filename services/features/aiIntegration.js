@@ -2,7 +2,7 @@
 "use strict";
 
 const Groq               = require("groq-sdk");
-const { logger, AppError } = require("../errorHandler");
+const { logger, AppError } = require("../../errorHandler");
 
 if (!process.env.GROQ_API_KEY) {
   console.error("❌ CRITICAL: GROQ_API_KEY is missing. AI features will fail."); return null;
