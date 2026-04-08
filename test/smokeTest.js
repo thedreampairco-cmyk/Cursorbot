@@ -72,7 +72,7 @@ try {
 } catch (e) { console.error("paymentService import failed:", e.message); failed++; }
 
 try {
-  const ws = require("../services/whatsappService");
+  const ws = require("../services/features/whatsappService");
   ["sendText","sendImage","sendTokenRequestMessage","sendPaymentLink",
    "sendTokenConfirmation","sendExpiryReminder","sendExpiredMessage"]
     .forEach(fn => assert(typeof ws[fn] === "function", `whatsappService.${fn} is a function`));
