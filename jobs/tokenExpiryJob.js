@@ -1,5 +1,4 @@
 const Order = require('../models/Order');
-const Order = require('../models/Order');
 /**
  * tokenExpiryJob.js
  * Runs every minute to manage the 15-minute token window:
