@@ -25,35 +25,25 @@ function endpoint(method) {
  */
 async function sendText(to, message) {
   try {
-    const chatId = to.includes('@') ? to : `${to}@c.us`;
-    await axios.post(endpoint("sendMessage"), {
-      chatId,
-      message,
-    });
-  } catch (err) {
-    console.error("[WhatsApp] sendText failed:", err.response?.data || err.message);
-  }
-}
+    const chatId = to.includes('@') ? to : `${to}
 
 /**
- * Sends an image with an optional caption.
- *
- * @param {string} to        - E.164 without '+'
- * @param {string} imageUrl  - Publicly accessible URL of the image
- * @param {string} caption   - Optional caption text
+ * Sends an image via Green API, parsing Google Drive URLs to direct byte-streams.
+ */
 async function sendImage(to, imageUrl, caption = "") {
   try {
     let fixedUrl = imageUrl;
-    if (imageUrl.includes("drive.google.com")) {
+    if (imageUrl && imageUrl.includes('drive.google.com')) {
       const match = imageUrl.match(/id=([a-zA-Z0-9_-]+)/);
-      if (match && match[1]) fixedUrl = `https://lh3.googleusercontent.com/d/${match[1]}`;
+      if (match && match[1]) {
+        fixedUrl = 'https://lh3.googleusercontent.com/d/' + match[1];
+      }
     }
     await sendImageByUrl(to, fixedUrl, caption);
   } catch (err) {
     console.error("[WhatsApp] sendImage failed:", err.message);
     throw err;
   }
-}
 }
 
 // ─── Pre-built message templates ─────────────────────────────────────────────
