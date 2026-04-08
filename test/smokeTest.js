@@ -79,7 +79,7 @@ try {
 } catch (e) { console.error("whatsappService import failed:", e.message); failed++; }
 
 try {
-  const inv = require("../services/inventoryService");
+  const inv = require("../services/features/inventoryService");
   ["deductStock","getStock","reserveStock","releaseReservation"]
     .forEach(fn => assert(typeof inv[fn] === "function", `inventoryService.${fn} is a function`));
   assert(!!inv.OutOfStockError,  "OutOfStockError exported");
