@@ -4,7 +4,7 @@ const { parse } = require('csv-parse/sync');
 const { sheetsClient } = require('../../config/api');
 const env = require('../../config/env');
 const { logger } = require('../../errorHandler');
-const memoryStore = require('./memoryStore');
+const memoryStore = require('../features/memoryStore');
 
 /**
  * Required column names in the Google Sheet (case-insensitive matching applied).
