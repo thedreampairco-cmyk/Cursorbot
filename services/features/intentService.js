@@ -297,6 +297,7 @@ async function handleSearchProduct(phone, message, entities, language) {
     const products = await searchProducts(query);
     if (products.length > 0) {
       const wa = require('./whatsappService');
+      console.log("👟 SNEAKER DATA DUMP:", products[0]);
       for (const p of products.slice(0, 3)) {
         const pic = p.imgUrl || p.imageUrl || p.image;
         if (pic) await wa.sendImage(phone, pic, `*${p.brand} ${p.name}*\n₹${p.price}`);
