@@ -158,7 +158,7 @@ async function analyzeSneakerImage(imageInput, prompt = null) {
           role:    "user",
           content: [
             { type: "image_url", image_url: { url: imageInput } },
-            { type: "text",      text: prompt || defaultPrompt },
+            { type: "text",      text: (prompt || defaultPrompt) + "\n\nCRITICAL INSTRUCTION: You MUST output ONLY valid JSON. No conversational text, no markdown formatting, and no extra phrases." },
           ],
         },
       ],
