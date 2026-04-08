@@ -7,7 +7,7 @@
 const { v4: uuidv4 }            = require("uuid");
 const { Order, PAYMENT_STATUS } = require("../models/Order");
 const paymentService            = require("../services/paymentService");
-const whatsappService           = require("../services/whatsappService");
+const whatsappService           = require("../services/features/whatsappService");
 const inventoryService          = require("../services/features/inventoryService");
 
 /**
