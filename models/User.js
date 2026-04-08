@@ -60,4 +60,4 @@ const OrderSchema = new mongoose.Schema(
 const userSchema = new mongoose.Schema({
   // ... your user fields (name, phone, etc.)
 });
-module.exports = mongoose.models.User || mongoose.model('User', UserSchema);
+module.exports = mongoose.models.User || mongoose.model('User', userSchema);
