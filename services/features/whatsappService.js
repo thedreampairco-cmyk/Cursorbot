@@ -6,6 +6,7 @@
  */
 
 const axios = require("axios");
+const { sendImageByUrl } = require("../whatsapp/greenApiMedia");
 
 const BASE_URL   = "https://api.green-api.com";
 const INSTANCE   = process.env.GREEN_API_INSTANCE_ID;
@@ -43,15 +44,13 @@ async function sendText(to, message) {
  */
 async function sendImage(to, imageUrl, caption = "") {
   try {
-    const chatId = `${to}@c.us`;
-    await axios.post(endpoint("sendFileByUrl"), {
-      chatId,
-      urlFile: imageUrl,
-      fileName: "sneaker.jpg",
-      caption,
-    });
+    // Fix Drive URLs: export=download redirects break Green API — use export=view
+    const fixedUrl = imageUrl.includes('drive.google.com/uc?export=download')
+      ? imageUrl.replace('export=download', 'export=view')
+      : imageUrl;
+    await sendImageByUrl(to, fixedUrl, caption);
   } catch (err) {
-    console.error("[WhatsApp] sendImage failed:", err.response?.data || err.message);
+    console.error("[WhatsApp] sendImage failed:", err.message);
   }
 }
 
@@ -80,7 +79,7 @@ async function sendTokenRequestMessage(to, { productName, totalAmount, tokenAmou
  */
 async function sendPaymentLink(to, { paymentUrl, productName, expiresMinutes }) {
   const message =
-    `💳 *Complete your ₹500 token here:*\n` +
+    `💳 *Complete your ₹${tokenAmount} token here:*\n` +
     `${paymentUrl}\n\n` +
     `⏳ This link is valid for *${expiresMinutes} minutes only*.\n` +
     `After that, your size on the *${productName}* goes back to the public catalog.\n\n` +

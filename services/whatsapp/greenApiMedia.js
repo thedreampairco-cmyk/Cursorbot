@@ -5,7 +5,6 @@ const axios               = require("axios");
 const { logger }          = require("../../errorHandler");
 const { chatId, apiUrl }  = require("./greenApiText");
 
-const TOKEN = process.env.GREEN_API_TOKEN;
 
 /**
  * Internal helper — send any file by URL.
@@ -99,7 +98,7 @@ async function fetchIncomingMedia(mediaUrl) {
   try {
     const { data } = await axios.get(mediaUrl, {
       responseType: "arraybuffer",
-      headers: { Authorization: `Bearer ${TOKEN}` },
+      // Green API auth is in the URL path — no extra headers needed
       timeout: 20000,
     });
     const buf = Buffer.from(data);
