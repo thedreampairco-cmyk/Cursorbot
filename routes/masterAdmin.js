@@ -9,7 +9,7 @@ const { updateOrderStatus, getOrdersByWaId } = require('../services/data/databas
 const { updateShipping } = require('../services/data/orderStore');
 const { sendText } = require('../services/whatsapp/greenApiText');
 const { getLowStockProducts, getOutOfStockProducts } = require('../services/features/inventoryService');
-const memoryStore = require('../services/data/memoryStore');
+const memoryStore = require('../services/features/memoryStore');
 const env = require('../config/env');
 
 // ── Auth ──────────────────────────────────────────────────────────────────────
