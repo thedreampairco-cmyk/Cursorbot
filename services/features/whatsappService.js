@@ -25,9 +25,13 @@ function endpoint(method) {
  */
 async function sendText(to, message) {
   try {
-    const chatId = to.includes('@') ? to : `${to}
+    const { sendTextMessage } = require('../whatsapp/greenApiText');
+    await sendTextMessage(to, message);
+  } catch (err) {
+    console.error("[WhatsApp] sendText failed:", err.message);
+  }
 }
-}
+
 /**
  * Sends an image via Green API, parsing Google Drive URLs to direct byte-streams.
  */
