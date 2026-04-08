@@ -298,7 +298,8 @@ async function handleSearchProduct(phone, message, entities, language) {
     if (products.length > 0) {
       const wa = require('./whatsappService');
       for (const p of products.slice(0, 3)) {
-        if (p.imgUrl) await wa.sendImage(phone, p.imgUrl, `*${p.brand} ${p.name}*\n₹${p.price}`);
+        const pic = p.imgUrl || p.imageUrl || p.image;
+        if (pic) await wa.sendImage(phone, pic, `*${p.brand} ${p.name}*\n₹${p.price}`);
       }
     }
 
