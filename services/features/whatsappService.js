@@ -26,7 +26,8 @@ function endpoint(method) {
 async function sendText(to, message) {
   try {
     const chatId = to.includes('@') ? to : `${to}
-
+}
+}
 /**
  * Sends an image via Green API, parsing Google Drive URLs to direct byte-streams.
  */
