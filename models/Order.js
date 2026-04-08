@@ -159,4 +159,4 @@ orderSchema.pre("save", function (next) {
 
 const Order = mongoose.model("Order", orderSchema);
 
-module.exports = { Order, PAYMENT_STATUS };
+module.exports = mongoose.models.Order || mongoose.model('Order', OrderSchema);
