@@ -41,17 +41,19 @@ async function sendText(to, message) {
  * @param {string} to        - E.164 without '+'
  * @param {string} imageUrl  - Publicly accessible URL of the image
  * @param {string} caption   - Optional caption text
- */
 async function sendImage(to, imageUrl, caption = "") {
   try {
-    // Fix Drive URLs: export=download redirects break Green API — use export=view
-    const fixedUrl = imageUrl.includes('drive.google.com/uc?export=download')
-      ? imageUrl.replace('export=download', 'export=view')
-      : imageUrl;
+    let fixedUrl = imageUrl;
+    if (imageUrl.includes("drive.google.com")) {
+      const match = imageUrl.match(/id=([a-zA-Z0-9_-]+)/);
+      if (match && match[1]) fixedUrl = `https://lh3.googleusercontent.com/d/${match[1]}`;
+    }
     await sendImageByUrl(to, fixedUrl, caption);
   } catch (err) {
     console.error("[WhatsApp] sendImage failed:", err.message);
+    throw err;
   }
+}
 }
 
 // ─── Pre-built message templates ─────────────────────────────────────────────
