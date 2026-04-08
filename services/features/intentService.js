@@ -624,10 +624,9 @@ async function _generate(phone, userContent, language) {
   const systemNote = buildSystemPrompt(client);
 
   try {
-    return await generateResponse(
-      [{ role: "user", content: userContent }],
-      systemNote
-    );
+    let response = await generateResponse([{ role: 'user', content: userContent }], systemNote);
+    response = response.replace(/\[INTENT:.*?\]/g, '').trim();
+    return response;
   } catch (err) {
     // ... fallback logic ...
   }
