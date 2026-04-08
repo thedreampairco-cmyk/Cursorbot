@@ -105,7 +105,7 @@ async function sendTokenConfirmation(to, { productName, orderId, codBalance }) {
 /**
  * Token expiry reminder — fired at T-5 minutes by the cron job.
  */
-async function sendExpiryReminder(to, { productName, paymentUrl, minutesLeft }) {
+async function sendExpiryReminder(to, { productName, paymentUrl, minutesLeft, tokenAmount }) {
   const message =
     `⚠️ *Hurry! Only ${minutesLeft} minutes left!*\n\n` +
     `Your size lock on *${productName}* expires soon.\n` +
