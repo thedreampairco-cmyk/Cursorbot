@@ -37,7 +37,7 @@ const express = require('express');
 const router  = express.Router();
 
 // ─── Services (all paths verified against your actual file tree) ──────────────
-const { sendText }                  = require('../services/whatsappService.js');
+const { sendText }                  = require('../services/features/whatsappService');
 const { processMessage } = require('../services/features/intentService');
 const { handleIncomingAudio }       = require('../services/features/voiceSearchService');
 const { onIncomingWhatsAppMessage } = require('../fraud');
