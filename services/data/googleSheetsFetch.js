@@ -50,6 +50,61 @@ function parseRow(row, colIndex) {
 
   const rawImage = get('imageUrl') || '';
   // Convert Google Drive viewer URLs to direct download URLs
+  const driveMatch = rawImage.match(//file/d/([a-zA-Z0-9_-]+)/);
+  const imageUrl = driveMatch
+    ? 'https://drive.google.com/uc?export=download&id=' + driveMatch[1]
+    : rawImage;t';
+
+const { parse } = require('csv-parse/sync');
+const { sheetsClient } = require('../../config/api');
+const env = require('../../config/env');
+const { logger } = require('../../errorHandler');
+const memoryStore = require('../features/memoryStore');
+
+/**
+ * Required column names in the Google Sheet (case-insensitive matching applied).
+ * The sheet MUST have at least: id, name, brand, category, price, sizes/size,
+ * color, stock, and one of imageUrl / image_url / image / img.
+ */
+const COLUMN_MAP = {
+  id:          ['id', 'product_id', 'sku'],
+  name:        ['name', 'product_name', 'title'],
+  brand:       ['brand'],
+  category:    ['category', 'catagory', 'type'],
+  price:       ['price', 'mrp', 'selling_price'],
+  sizes:       ['sizes', 'size', 'available_sizes'],
+  color:       ['color', 'colour'],
+  stock:       ['stock', 'inventory', 'qty', 'quantity'],
+  description: ['description', 'desc'],
+  imageUrl:    ['imageurl', 'image_url', 'image', 'img', 'photo', 'picture'],
+};
+
+function resolveColumn(headers, aliases) {
+  const lower = headers.map((h) => h.toLowerCase().trim());
+  for (const alias of aliases) {
+    const idx = lower.indexOf(alias.toLowerCase());
+    if (idx !== -1) return headers[idx]; // original casing
+  }
+  return null;
+}
+
+function buildColumnIndex(headers) {
+  const index = {};
+  for (const [field, aliases] of Object.entries(COLUMN_MAP)) {
+    index[field] = resolveColumn(headers, aliases);
+  }
+  return index;
+}
+
+function parseRow(row, colIndex) {
+  // colIndex is { field: "OriginalColumnName" } built by buildColumnIndex
+  const get = (field) => {
+    const col = colIndex[field];
+    return col ? (row[col] || null) : null;
+  };
+
+  const rawImage = get('imageUrl') || '';
+  // Convert Google Drive viewer URLs to direct download URLs
   const imageUrl = rawImage.replace(
     /https://drive.google.com/file/d/([^/]+)/view[^"]*/,
     'https://drive.google.com/uc?export=download&id=$1'
