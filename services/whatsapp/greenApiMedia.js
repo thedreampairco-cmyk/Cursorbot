@@ -3,8 +3,19 @@
 
 const axios               = require("axios");
 const { logger }          = require("../../errorHandler");
-const { chatId, apiUrl }  = require("./greenApiText");
+const { chatId } = require("./greenApiText");
 
+
+
+// ── INJECTED URL BUILDER ─────────────────────────────────────────────────────
+function buildApiUrl(endpoint) {
+  const host = process.env.GREEN_API_HOST || "https://api.green-api.com";
+  // Fallbacks for common env variable naming conventions
+  const id = process.env.GREEN_API_INSTANCE_ID || process.env.INSTANCE_ID || "";
+  const token = process.env.GREEN_API_TOKEN || process.env.API_TOKEN || process.env.GREEN_API_TOKEN_INSTANCE || "";
+  return `${host}/waInstance${id}/${endpoint}/${token}`;
+}
+// ─────────────────────────────────────────────────────────────────────────────
 
 /**
  * Internal helper — send any file by URL.
@@ -16,7 +27,7 @@ const { chatId, apiUrl }  = require("./greenApiText");
  */
 async function _sendFileByUrl(phone, urlFile, fileName, caption = "") {
   const { data } = await axios.post(
-    apiUrl("sendFileByUrl"),
+    buildApiUrl("sendFileByUrl"),
     { chatId: chatId(phone), urlFile, fileName, caption },
     { timeout: 15000 }
   );
@@ -119,7 +130,7 @@ async function fetchIncomingMedia(mediaUrl) {
 async function getMediaDownloadUrl(chatIdStr, idMessage) {
   try {
     const { data } = await axios.post(
-      apiUrl("downloadFile"),
+      buildApiUrl("downloadFile"),
       { chatId: chatIdStr, idMessage },
       { timeout: 15000 }
     );
