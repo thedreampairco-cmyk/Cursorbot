@@ -34,7 +34,7 @@ const router  = express.Router();
 
 const paymentService   = require("../services/paymentService");
 const whatsappService  = require("../services/features/whatsappService");
-const inventoryService = require("../services/inventoryService");
+const inventoryService = require("../services/features/inventoryService");
 const { Order, PAYMENT_STATUS } = require("../models/Order");
 const { OutOfStockError }       = require("../models/Inventory");
 
