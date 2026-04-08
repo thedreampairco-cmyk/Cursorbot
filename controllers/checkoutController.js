@@ -1,4 +1,4 @@
-const { createPaymentLink } = require("../services/razorpayService");
+const { createPaymentLink } = require("../services/paymentService");
 const { sendPaymentLinkMessage } = require("../services/whatsappService");
 const Order = require("../models/Order");
 
