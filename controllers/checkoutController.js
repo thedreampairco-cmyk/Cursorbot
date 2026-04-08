@@ -1,5 +1,5 @@
 const { createPaymentLink } = require("../services/paymentService");
-const { sendPaymentLinkMessage } = require("../services/whatsappService");
+const { sendPaymentLinkMessage } = require("../services/features/whatsappService");
 const Order = require("../models/Order");
 
 /**
