@@ -43,6 +43,7 @@ async function sendImage(to, imageUrl, caption = "") {
   } catch (err) {
     console.error("[WhatsApp] sendImage failed:", err.message);
     throw err;
+    throw err;
   }
 }
 
