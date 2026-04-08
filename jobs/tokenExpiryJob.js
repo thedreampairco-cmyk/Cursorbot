@@ -11,7 +11,7 @@
 
 const cron           = require("node-cron");
 const { Order, PAYMENT_STATUS } = require("../models/Order");
-const whatsappService = require("../services/whatsappService");
+const whatsappService = require("../services/features/whatsappService");
 
 const REMINDER_WINDOW_MS = 5 * 60 * 1000; // send reminder when 5 min remain
 
