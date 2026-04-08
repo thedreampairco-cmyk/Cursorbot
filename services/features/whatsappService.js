@@ -109,7 +109,7 @@ async function sendExpiryReminder(to, { productName, paymentUrl, minutesLeft, to
   const message =
     `⚠️ *Hurry! Only ${minutesLeft} minutes left!*\n\n` +
     `Your size lock on *${productName}* expires soon.\n` +
-    `Complete your ₹500 token now or your size goes back on sale:\n` +
+    `Complete your ₹${tokenAmount} token now or your size goes back on sale:\n` +
     `${paymentUrl}`;
 
   await sendText(to, message);
