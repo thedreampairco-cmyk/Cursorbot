@@ -1,6 +1,9 @@
 // services/features/intentService.js
 "use strict";
 
+const { buildSystemPrompt } = require('../ai/buildSystemPrompt');
+const { getClientByWaId } = require('../data/databaseService');
+
 const { logger } = require("../../errorHandler");
 const { getVisionAnalysis } = require("./visionRecognition");
 const {
@@ -614,10 +617,11 @@ async function handleImageSearchPrompt(phone, language) {
  * @returns {Promise<string>}
  */
 async function _generate(phone, userContent, language) {
-  const prefs      = getUserPrefs(phone);
-  const systemNote = language === "hi"
-    ? `${MAYA_SYSTEM_PROMPT}\n\nIMPORTANT: The customer prefers Hindi/Hinglish. Always reply in Hindi/Hinglish.`
-    : MAYA_SYSTEM_PROMPT;
+  // 1. Fetch the real client data from the DB
+  const client = await getClientByWaId(phone); 
+  
+  // 2. Build the dynamic prompt (Persona + Catalog + Prefs)
+  const systemNote = buildSystemPrompt(client);
 
   try {
     return await generateResponse(
@@ -625,12 +629,10 @@ async function _generate(phone, userContent, language) {
       systemNote
     );
   } catch (err) {
-    logger.error(`[Intent] _generate failed for ${phone}: ${err.message}`);
-    return language === "hi"
-      ? "Maafi kijiye, abhi thodi samasya aa rahi hai. Kripya thodi der baad try karein. 🙏"
-      : "Sorry, I'm experiencing a brief issue. Please try again in a moment. 🙏";
+    // ... fallback logic ...
   }
 }
+
 
 /**
  * Return an empty entities object.
