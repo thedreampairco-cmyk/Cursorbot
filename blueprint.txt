@@ -1,0 +1,330 @@
+--- DIRECTORY TREE ---
+.
+./server.js
+./jobs
+./jobs/tokenExpiryJob.js
+./package-lock.json
+./package.json
+./controllers
+./controllers/checkoutController.js
+./controllers/orderController.js
+./routes
+./routes/webhook.js
+./routes/catalogSync.js
+./routes/masterAdmin.js
+./routes/webhooks.js
+./routes/orderNotifications.js
+./services
+./services/greenApi.js
+./services/inventoryService.js
+./services/razorpayService.js
+./services/visionService.js
+./services/orderStore.js
+./services/googleSheets.js
+./services/databaseService.js
+./services/whatsapp
+./services/whatsapp/greenApiText.js
+./services/whatsapp/greenApiMedia.js
+./services/whatsapp/whatsappService.js
+./services/ai
+./services/ai/buildSystemPrompt.js
+./services/ai/aiIntegration.js.bak
+./services/data
+./services/data/memoryStore.js
+./services/data/googleSheetsFetch.js
+./services/data/databaseService.js
+./services/data/orderStore.js
+./services/features
+./services/features/inventoryService.js
+./services/features/visionRecognition.js
+./services/features/voiceSearchService.js
+./services/features/intentService.js
+./services/features/aiIntegration.js
+./services/features/memoryStore.js
+./services/features/whatsappService.js
+./services/paymentService.js
+./services/emailService.js
+./services/adminAlertService.js
+./urlHelper.js
+./errorHandler.js
+./config
+./config/env.js
+./config/api.js
+./autopush.sh
+./database
+./database/clients.json
+./blueprint.txt
+./scripts
+./scripts/update-tracker.js
+./PROGRESS.md
+./models
+./models/Client.js
+./models/User.js
+./models/FraudState.js
+./models/Order.js
+./models/Inventory.js
+./service-account.json
+./render.yaml
+./logs
+./logs/error.log
+./logs/combined.log
+./test
+./test/smokeTest.js
+./index.js
+./fraud
+./fraud/index.js
+./fraud/shields
+./fraud/shields/codInterceptor.js
+./fraud/shields/locationVerifier.js
+./fraud/shields/unboxingContract.js
+./integrations
+./integrations/razorpay
+./integrations/razorpay/depositHandler.js
+./integrations/whatsapp
+./integrations/whatsapp/sender.js
+./admin
+./admin/notifier.js
+./utils
+./utils/logger.js
+./middleware
+./middleware/webhookVerify.js
+
+--- CORE FUNCTIONS & EXPORTS ---
+./services/greenApi.js:11:async function sendMessage(chatId, message) {
+./services/greenApi.js:41:async function sendMediaByUrl(chatId, fileUrl, fileName, caption = "") {
+./services/greenApi.js:81:module.exports = {
+./services/inventoryService.js:39:async function getSheetsToken() {
+./services/inventoryService.js:69:async function findSkuRow(token, sku) {
+./services/inventoryService.js:88:async function syncStockToSheets(sku, newStock) {
+./services/inventoryService.js:124:async function deductStock(sku, qty = 1, orderId = "") {
+./services/inventoryService.js:143:async function getStock(sku) {
+./services/inventoryService.js:154:async function reserveStock(sku, orderId) {
+./services/inventoryService.js:168:async function releaseReservation(sku, orderId) {
+./services/inventoryService.js:173:module.exports = {
+./services/razorpayService.js:18:async function createPaymentLink({ orderId, customerName, customerPhone, amount }) {
+./services/razorpayService.js:59:module.exports = { createPaymentLink };
+./services/visionService.js:74:module.exports = { getVisionAnalysis };
+./services/orderStore.js:7:async function saveOrderToSheet(orderData) {
+./services/orderStore.js:27:module.exports = { saveOrderToSheet };
+./services/googleSheets.js:17:function _getServiceAccount() {
+./services/googleSheets.js:34:function _base64url(str) {
+./services/googleSheets.js:42:function _buildJwt(sa) {
+./services/googleSheets.js:66:async function _getAccessToken() {
+./services/googleSheets.js:89:function _sheetsUrl(path) {
+./services/googleSheets.js:96:async function _authHeader() {
+./services/googleSheets.js:110:async function fetchCatalogFromSheet() {
+./services/googleSheets.js:148:async function syncInventory(sheetName = "Inventory") {
+./services/googleSheets.js:191:async function deductStock(sku, qty, sheetName = "Inventory") {
+./services/googleSheets.js:238:function _stockColumnLetter(_sheetName) {
+./services/googleSheets.js:249:async function isInStock(sku, qty = 1, sheetName = "Inventory") {
+./services/googleSheets.js:270:async function appendOrderToSheet(order, sheetName = "Orders") {
+./services/googleSheets.js:317:async function updateOrderPaymentStatus(orderId, status, sheetName = "Orders") {
+./services/googleSheets.js:353:module.exports = {
+./services/databaseService.js:7:async function getClientByInstance(idInstance) {
+./services/databaseService.js:24:module.exports = { getClientByInstance };
+./services/whatsapp/greenApiText.js:22:function chatId(phone) {
+./services/whatsapp/greenApiText.js:32:function apiUrl(method) {
+./services/whatsapp/greenApiText.js:42:async function sendTextMessage(phone, text) {
+./services/whatsapp/greenApiText.js:64:async function sendButtonMessage(phone, text, buttons) {
+./services/whatsapp/greenApiText.js:94:async function sendListMessage(phone, text, title, sections) {
+./services/whatsapp/greenApiText.js:117:async function sendTemplateMessage(phone, text, footer, templateButtons) {
+./services/whatsapp/greenApiText.js:139:async function sendContactCard(phone, contactName, contactPhone) {
+./services/whatsapp/greenApiText.js:169:async function sendLocationMessage(phone, lat, lng, name, address) {
+./services/whatsapp/greenApiText.js:184:module.exports = {
+./services/whatsapp/greenApiMedia.js:18:async function _sendFileByUrl(phone, urlFile, fileName, caption = "") {
+./services/whatsapp/greenApiMedia.js:35:async function sendImageByUrl(phone, imageUrl, caption = "") {
+./services/whatsapp/greenApiMedia.js:51:async function sendVideoByUrl(phone, videoUrl, caption = "") {
+./services/whatsapp/greenApiMedia.js:68:async function sendDocumentByUrl(phone, docUrl, fileName = "document.pdf", caption = "") {
+./services/whatsapp/greenApiMedia.js:83:async function sendAudioByUrl(phone, audioUrl) {
+./services/whatsapp/greenApiMedia.js:98:async function fetchIncomingMedia(mediaUrl) {
+./services/whatsapp/greenApiMedia.js:120:async function getMediaDownloadUrl(chatIdStr, idMessage) {
+./services/whatsapp/greenApiMedia.js:135:module.exports = {
+./services/whatsapp/whatsappService.js:24:async function _wrap(context, fn, errorCode) {
+./services/whatsapp/whatsappService.js:42:async function sendMessage(phone, text) {
+./services/whatsapp/whatsappService.js:55:async function sendProductCard(phone, product) {
+./services/whatsapp/whatsappService.js:86:async function sendSizeSelector(phone, product, availableSizes) {
+./services/whatsapp/whatsappService.js:122:async function sendCatalogMenu(phone, categories) {
+./services/whatsapp/whatsappService.js:156:async function sendCartSummary(phone, cartMessage) {
+./services/whatsapp/whatsappService.js:183:async function sendPaymentLink(phone, paymentUrl, amount, orderId) {
+./services/whatsapp/whatsappService.js:207:async function sendCodDepositRequest(phone, depositAmount, paymentUrl, orderId) {
+./services/whatsapp/whatsappService.js:231:async function sendOrderConfirmation(phone, order) {
+./services/whatsapp/whatsappService.js:271:async function sendUnboxingInstructions(phone, orderId, uploadUrl) {
+./services/whatsapp/whatsappService.js:295:async function requestLiveLocation(phone) {
+./services/whatsapp/whatsappService.js:318:async function notifyAdmin(message) {
+./services/whatsapp/whatsappService.js:336:async function sendLowStockAlert(product) {
+./services/whatsapp/whatsappService.js:356:async function handoffToHuman(phone, reason = "Customer requested support") {
+./services/whatsapp/whatsappService.js:381:module.exports = {
+./services/ai/buildSystemPrompt.js:5:function buildSystemPrompt(client) {
+./services/ai/buildSystemPrompt.js:77:module.exports = { buildSystemPrompt };
+./services/ai/aiIntegration.js.bak:11:function extractIntents(text) {
+./services/ai/aiIntegration.js.bak:34:function stripIntentTags(text) {
+./services/ai/aiIntegration.js.bak:44:function resolveProducts(ids) {
+./services/ai/aiIntegration.js.bak:56:async function processMessage(client, userText) {
+./services/ai/aiIntegration.js.bak:106:async function analyseImageForSneakers(imageUrl) {
+./services/ai/aiIntegration.js.bak:131:module.exports = { processMessage, analyseImageForSneakers };
+./services/data/memoryStore.js:12:function setCatalog(products) {
+./services/data/memoryStore.js:17:function getCatalog() {
+./services/data/memoryStore.js:21:function getLastSyncAt() {
+./services/data/memoryStore.js:25:function getCatalogSize() {
+./services/data/memoryStore.js:33:function filterCatalog({ brand, category, size, color, maxPrice, minPrice, query } = {}) {
+./services/data/memoryStore.js:52:function strMatch(field, value) {
+./services/data/memoryStore.js:60:function findById(id) {
+./services/data/memoryStore.js:64:module.exports = { setCatalog, getCatalog, getLastSyncAt, getCatalogSize, filterCatalog, findById };
+./services/data/googleSheetsFetch.js:27:function resolveColumn(headers, aliases) {
+./services/data/googleSheetsFetch.js:36:function buildColumnIndex(headers) {
+./services/data/googleSheetsFetch.js:44:function parseRow(row, headers) {
+./services/data/googleSheetsFetch.js:60:async function fetchAndSyncCatalog() {
+./services/data/googleSheetsFetch.js:88:module.exports = { fetchAndSyncCatalog };
+./services/data/databaseService.js:13:async function getOrCreateClient(waId, name = '') {
+./services/data/databaseService.js:25:async function saveClient(client) {
+./services/data/databaseService.js:34:async function getClientByWaId(waId) {
+./services/data/databaseService.js:41:async function incrementLeadScore(waId, delta = 1) {
+./services/data/databaseService.js:48:async function recordBrowseEvent(waId, product) {
+./services/data/databaseService.js:65:async function getAbandonedCartClients(hours = 2) {
+./services/data/databaseService.js:78:async function markCartAbandoned(waId) {
+./services/data/databaseService.js:84:async function createOrder(data) {
+./services/data/databaseService.js:91:async function getOrderById(orderId) {
+./services/data/databaseService.js:95:async function updateOrderStatus(orderId, status, extra = {}) {
+./services/data/databaseService.js:101:async function getOrdersByWaId(waId) {
+./services/data/databaseService.js:107:async function getSegmentCounts() {
+./services/data/databaseService.js:111:async function getTopBrowsedProducts(limit = 10) {
+./services/data/databaseService.js:120:async function getConversionStats() {
+./services/data/databaseService.js:135:module.exports = {
+./services/data/orderStore.js:26:async function createPaymentLink(orderId, amountInPaise, customerName, waId) {
+./services/data/orderStore.js:48:async function placeOrder({ waId, customerName, items, shippingAddress, notes }) {
+./services/data/orderStore.js:80:async function confirmPayment(orderId, razorpayPaymentId) {
+./services/data/orderStore.js:91:async function updateShipping(orderId, awbNumber, shippingProvider) {
+./services/data/orderStore.js:100:module.exports = { placeOrder, confirmPayment, updateShipping };
+./services/features/inventoryService.js:32:async function getCatalog(forceRefresh = false) {
+./services/features/inventoryService.js:58:async function getProductBySku(sku) {
+./services/features/inventoryService.js:68:async function getProductsByCategory(category) {
+./services/features/inventoryService.js:80:async function searchProducts(query) {
+./services/features/inventoryService.js:126:async function getCategorySummary() {
+./services/features/inventoryService.js:141:async function getInStockProducts() {
+./services/features/inventoryService.js:153:async function getInventory(forceRefresh = false) {
+./services/features/inventoryService.js:171:async function getStockCount(sku) {
+./services/features/inventoryService.js:184:async function checkAvailability(sku, qty = 1) {
+./services/features/inventoryService.js:201:async function getAvailableSizes(sku) {
+./services/features/inventoryService.js:219:async function reserveStock(sku, qty) {
+./services/features/inventoryService.js:256:async function validateCartItems(cartItems) {
+./services/features/inventoryService.js:284:function formatInventoryWarning(invalidItems) {
+./services/features/inventoryService.js:299:async function suggestAlternatives(sku, limit = 3) {
+./services/features/inventoryService.js:330:async function getFeaturedProducts(limit = 5) {
+./services/features/inventoryService.js:343:async function getPersonalisedRecommendations(phone, limit = 3) {
+./services/features/inventoryService.js:372:function startInventorySyncScheduler() {
+./services/features/inventoryService.js:385:module.exports = {
+./services/features/visionRecognition.js:4:async function _downloadCleanMedia(url) {
+./services/features/visionRecognition.js:51:function _bufferToDataUri(buffer, mimeType = "image/jpeg") {
+./services/features/visionRecognition.js:61:function _safeParseJson(raw) {
+./services/features/visionRecognition.js:76:function isSupportedImageType(mimeType) {
+./services/features/visionRecognition.js:92:async function downloadWhatsAppImage(chatIdStr, idMessage) {
+./services/features/visionRecognition.js:142:async function fetchPublicImage(imageUrl) {
+./services/features/visionRecognition.js:182:async function analyseImage(imageInput) {
+./services/features/visionRecognition.js:227:function buildSearchDescription(analysis) {
+./services/features/visionRecognition.js:245:async function matchToProducts(analysis, topK = 3) {
+./services/features/visionRecognition.js:300:async function processWhatsAppImage(phone, chatIdStr, idMessage) {
+./services/features/visionRecognition.js:346:async function processImageUrl(phone, imageUrl) {
+./services/features/visionRecognition.js:376:async function _buildVisionResponse(phone, analysis, products) {
+./services/features/visionRecognition.js:431:function _fallbackVisionResponse(products) {
+./services/features/visionRecognition.js:449:function _noMatchResponse(analysis, language) {
+./services/features/visionRecognition.js:476:async function compareVisionResults(phone, analysisA, analysisB) {
+./services/features/visionRecognition.js:508:async function verifySneakerIdentity(imageInput, sku) {
+./services/features/visionRecognition.js:539: * Wrapper function to bridge Green API webhook with the vision AI
+./services/features/visionRecognition.js:541:async function getVisionAnalysis(downloadUrl) {
+./services/features/visionRecognition.js:560:module.exports = {
+./services/features/voiceSearchService.js:32:function getGroqClient() {
+./services/features/voiceSearchService.js:44:function getSendText() {
+./services/features/voiceSearchService.js:48:function getAIResponse() {
+./services/features/voiceSearchService.js:52:function getClientModel() {
+./services/features/voiceSearchService.js:78:async function downloadAudioBuffer(audioUrl) {
+./services/features/voiceSearchService.js:116:async function transcribeAudio(buffer, filename, mimeType) {
+./services/features/voiceSearchService.js:158:async function processVoiceText(text, senderPhone) {
+./services/features/voiceSearchService.js:210:async function handleIncomingAudio(audioUrl, senderPhone) {
+./services/features/voiceSearchService.js:239:module.exports = { handleIncomingAudio };
+./services/features/intentService.js:60:function _appendHistory(phone, role, text) {
+./services/features/intentService.js:96:function _buildPriorContext(phone) {
+./services/features/intentService.js:129:async function extractIntent(phone, message) {
+./services/features/intentService.js:208:async function handleGreeting(phone, language) {
+./services/features/intentService.js:232:async function handleBrowseCatalog(phone, language) {
+./services/features/intentService.js:260:async function handleSearchProduct(phone, message, entities, language) {
+./services/features/intentService.js:300:async function handleSizeHelp(phone, entities, language) {
+./services/features/intentService.js:339:async function handleViewCart(phone, language) {
+./services/features/intentService.js:368:async function handlePaymentQuery(phone, message, language) {
+./services/features/intentService.js:389:async function handleOrderStatus(phone, language) {
+./services/features/intentService.js:412:async function handleReturnExchange(phone, language) {
+./services/features/intentService.js:430:async function handleFarewell(phone, language) {
+./services/features/intentService.js:445:async function handleUnknown(phone, message, language) {
+./services/features/intentService.js:478:async function processMessage(phone, message) {
+./services/features/intentService.js:565:async function handleImageSearchPrompt(phone, language) {
+./services/features/intentService.js:586:async function _generate(phone, userContent, language) {
+./services/features/intentService.js:609:function _emptyEntities() {
+./services/features/intentService.js:618:function _mergeEntities(raw) {
+./services/features/intentService.js:634:function _guessLang(lower) {
+./services/features/intentService.js:640:async function handleAddToCart(phone, entities, language) {
+./services/features/intentService.js:664:module.exports = {
+./services/features/aiIntegration.js:72:async function generateResponse(messages, systemPrompt = null, options = {}) {
+./services/features/aiIntegration.js:138:async function analyzeSneakerImage(imageInput, prompt = null) {
+./services/features/aiIntegration.js:191:async function matchSneakerFromCatalog(description, catalog, topK = 3) {
+./services/features/aiIntegration.js:255:async function generateOrderSummary(order) {
+./services/features/aiIntegration.js:288:async function classifyIntent(message, priorContext = []) {
+./services/features/aiIntegration.js:335:async function detectLanguage(message) {
+./services/features/aiIntegration.js:358:module.exports = {
+./services/features/memoryStore.js:30:function now() {
+./services/features/memoryStore.js:44:function getSession(phone) {
+./services/features/memoryStore.js:61:function setSession(phone, data) {
+./services/features/memoryStore.js:73:function updateSession(phone, partial) {
+./services/features/memoryStore.js:82:function clearSession(phone) {
+./services/features/memoryStore.js:96:function getCart(phone) {
+./services/features/memoryStore.js:113:function setCart(phone, items, metadata = {}) {
+./services/features/memoryStore.js:126:function addToCart(phone, item) {
+./services/features/memoryStore.js:145:function removeFromCart(phone, sku, size) {
+./services/features/memoryStore.js:157:function getCartTotal(phone) {
+./services/features/memoryStore.js:168:function formatCartMessage(phone) {
+./services/features/memoryStore.js:188:function clearCart(phone) {
+./services/features/memoryStore.js:207:function getConversationState(phone) {
+./services/features/memoryStore.js:219:function setConversationState(phone, step, payload = {}) {
+./services/features/memoryStore.js:232:function updateConversationPayload(phone, partial) {
+./services/features/memoryStore.js:244:function resetConversation(phone) {
+./services/features/memoryStore.js:257:function getUserPrefs(phone) {
+./services/features/memoryStore.js:266:function setUserPrefs(phone, partial) {
+./services/features/memoryStore.js:284:function acquireLock(key, reason = "processing") {
+./services/features/memoryStore.js:297:function releaseLock(key) {
+./services/features/memoryStore.js:306:function isLocked(key) {
+./services/features/memoryStore.js:324:function getStoreSizes() {
+./services/features/memoryStore.js:337:function flushAll() {
+./services/features/memoryStore.js:350:function _runGarbageCollection() {
+./services/features/memoryStore.js:379:module.exports = {
+./services/features/whatsappService.js:15:function endpoint(method) {
+./services/features/whatsappService.js:25:async function sendText(to, message) {
+./services/features/whatsappService.js:44:async function sendImage(to, imageUrl, caption = "") {
+./services/features/whatsappService.js:63:async function sendTokenRequestMessage(to, { productName, totalAmount, tokenAmount, codBalance }) {
+./services/features/whatsappService.js:81:async function sendPaymentLink(to, { paymentUrl, productName, expiresMinutes }) {
+./services/features/whatsappService.js:95:async function sendTokenConfirmation(to, { productName, orderId, codBalance }) {
+./services/features/whatsappService.js:109:async function sendExpiryReminder(to, { productName, paymentUrl, minutesLeft }) {
+./services/features/whatsappService.js:122:async function sendExpiredMessage(to, { productName }) {
+./services/features/whatsappService.js:132:module.exports = {
+./services/paymentService.js:28:function toPaise(inr) {
+./services/paymentService.js:37:function _normalizePhone(phone) {
+./services/paymentService.js:55:async function createOrder(amount, currency = "INR", receipt = null, notes = {}) {
+./services/paymentService.js:87:async function createPaymentLink({
+./services/paymentService.js:141:async function fetchPaymentLink(paymentLinkId) {
+./services/paymentService.js:161:async function fetchPaymentDetails(paymentId) {
+./services/paymentService.js:178:async function capturePayment(paymentId, amount) {
+./services/paymentService.js:196:async function createRefund(paymentId, amount = null, notes = {}) {
+./services/paymentService.js:223:function verifyWebhookSignature(rawBody, signature) {
+./services/paymentService.js:250:function verifyPaymentSignature(razorpayOrderId, razorpayPaymentId, signature) {
+./services/paymentService.js:266:module.exports = {
+./services/emailService.js:19:function getHeaders() {
+./services/emailService.js:42:function buildConfirmationHtml(order) {
+./services/emailService.js:177:function buildConfirmationText(order) {
+./services/emailService.js:209:async function sendOrderConfirmation(toEmail, toName, order) {
+./services/emailService.js:246:async function sendRefundNotification(toEmail, toName, order) {
+./services/emailService.js:280:module.exports = { sendOrderConfirmation, sendRefundNotification };
+./services/adminAlertService.js:23:function formatINR(amount) {
+./services/adminAlertService.js:27:function now() {
+./services/adminAlertService.js:45:async function postToSlack(blocks, fallback) {
+./services/adminAlertService.js:64:async function sendSms(body) {
+./services/adminAlertService.js:102:async function alertNewOrder(order) {
+./services/adminAlertService.js:174:async function alertOOS(order) {
+./services/adminAlertService.js:226:async function alertLowStock(sku, productName, remainingStock) {
+./services/adminAlertService.js:250:module.exports = { alertNewOrder, alertOOS, alertLowStock };
