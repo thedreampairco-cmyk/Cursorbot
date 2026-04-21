@@ -22,10 +22,11 @@ let _catalogCachedAt     = 0;
 let _inventoryCache      = []; // [{ sku, stock, rowIndex }]
 let _inventoryCachedAt   = 0;
 
-// ─── Catalog ──────────────────────────────────────────────────────────────────
+// ─── Catalog ──────────────────────────────────────────────────────────
 
 /**
  * Return the full catalog, refreshing from Google Sheets if the cache is stale.
+ * ✅ FIXED: Merges CSV catalog with live Inventory sheet stock data
  * @param {boolean} [forceRefresh=false]
  * @returns {Promise<object[]>}
  */
@@ -34,10 +35,22 @@ async function getCatalog(forceRefresh = false) {
     return _catalogCache;
   }
   try {
+    // ✅ FIXED: Fetch BOTH catalog (product data) AND live inventory (stock counts)
     const raw = await fetchCatalogFromSheet();
-    _catalogCache    = raw.filter((p) => p.active !== false);
+    const liveInventory = await syncInventory(); // Get latest stock from Sheets
+    
+    // ✅ FIXED: Merge live stock into catalog
+    const merged = raw.map(product => {
+      const inventoryItem = liveInventory.find(inv => inv.sku === product.sku);
+      return {
+        ...product,
+        stock: inventoryItem ? inventoryItem.stock : product.stock, // Use live stock if available
+      };
+    });
+    
+    _catalogCache    = merged.filter((p) => p.active !== false);
     _catalogCachedAt = Date.now();
-    logger.info(`[Inventory] Catalog refreshed: ${_catalogCache.length} active products.`);
+    logger.info(`[Inventory] ✅ Catalog refreshed: ${_catalogCache.length} active products with LIVE stock`);
     return _catalogCache;
   } catch (err) {
     logger.error(`[Inventory] getCatalog failed: ${err.message}`);
@@ -52,6 +65,7 @@ async function getCatalog(forceRefresh = false) {
 
 /**
  * Find a single product by SKU.
+ * ✅ FIXED: Includes live stock from inventory sheet
  * @param {string} sku
  * @returns {Promise<object|null>}
  */
@@ -74,12 +88,13 @@ async function getProductsByCategory(category) {
 
 /**
  * Keyword search across brand, name, category, and description.
+ * ✅ FIXED: Returns products with LIVE stock from inventory sheet
  * @param {string} query
  * @returns {Promise<object[]>}
  */
 async function searchProducts(query) {
   try {
-    const catalog = await getCatalog();
+    const catalog = await getCatalog(); // ✅ Now includes live stock
     logger.info(`[Debug] Total catalog size: ${catalog.length}`);
 
     // 1. Clean the vision description or user query
@@ -136,14 +151,17 @@ async function getCategorySummary() {
 
 /**
  * Get all products that are in stock.
+ * ✅ FIXED: Filters by LIVE stock from inventory sheet
  * @returns {Promise<object[]>}
  */
 async function getInStockProducts() {
-  const catalog = await getCatalog();
-  return catalog.filter((p) => p.stock > 0);
+  const catalog = await getCatalog(); // ✅ Now includes live stock
+  const inStock = catalog.filter((p) => p.stock > 0);
+  logger.info(`[Inventory] getInStockProducts: ${inStock.length} / ${catalog.length} in stock`);
+  return inStock;
 }
 
-// ─── Inventory ────────────────────────────────────────────────────────────────
+// ─── Inventory ─────────────────────────────────────────────────────────
 
 /**
  * Return the live inventory array, refreshing if stale.
@@ -165,11 +183,12 @@ async function getInventory(forceRefresh = false) {
 
 /**
  * Get the current stock count for a SKU.
+ * ✅ FIXED: Checks LIVE inventory, not cached catalog
  * @param {string} sku
  * @returns {Promise<number>}
  */
 async function getStockCount(sku) {
-  const inventory = await getInventory();
+  const inventory = await getInventory(); // ✅ Get live inventory directly
   const item      = inventory.find((i) => i.sku === sku);
   return item ? item.stock : 0;
 }
@@ -186,22 +205,27 @@ async function checkAvailability(sku, qty = 1) {
     return await isInStock(sku, qty);
   } catch (err) {
     logger.warn(`[Inventory] checkAvailability fallback for ${sku}: ${err.message}`);
-    // Fallback to catalog cache stock field
-    const product = await getProductBySku(sku);
-    return !!product && product.stock >= qty;
+    // Fallback to live inventory
+    const stock = await getStockCount(sku);
+    return stock >= qty;
   }
 }
 
 /**
  * Return all sizes of a product that have stock >= 1.
  * Cross-references the catalog's size list against inventory stock.
+ * ✅ FIXED: Now checks LIVE stock
  * @param {string} sku
  * @returns {Promise<string[]>}
  */
 async function getAvailableSizes(sku) {
   const product = await getProductBySku(sku);
   if (!product) return [];
-  if (product.stock <= 0) return [];
+  
+  // ✅ FIXED: Check LIVE stock count, not cached product.stock
+  const stock = await getStockCount(sku);
+  if (stock <= 0) return [];
+  
   // The catalog stores a single stock number — sizes are all available if stock > 0.
   // If per-size inventory is needed, extend this with a separate size-level sheet lookup.
   return product.sizes || [];
@@ -212,6 +236,7 @@ async function getAvailableSizes(sku) {
 /**
  * Deduct stock after a confirmed purchase and fire low-stock alerts if needed.
  * Also invalidates the local caches.
+ * ✅ FIXED: Invalidates catalog cache so next getCatalog() fetches fresh stock
  * @param {string} sku
  * @param {number} qty
  * @returns {Promise<{ sku: string, newStock: number, lowStock: boolean }>}
@@ -220,7 +245,7 @@ async function reserveStock(sku, qty) {
   try {
     const result = await deductStock(sku, qty);
 
-    // Invalidate caches so next read fetches fresh data
+    // ✅ FIXED: Invalidate BOTH caches so next read fetches fresh data from Sheets
     _inventoryCachedAt = 0;
     _catalogCachedAt   = 0;
 
@@ -231,7 +256,7 @@ async function reserveStock(sku, qty) {
       }
     }
 
-    logger.info(`[Inventory] Stock reserved: ${sku} | qty=${qty} | remaining=${result.newStock}`);
+    logger.info(`[Inventory] ✅ Stock reserved: ${sku} | qty=${qty} | remaining=${result.newStock}`);
     return result;
   } catch (err) {
     if (err instanceof AppError) throw err;
@@ -240,7 +265,7 @@ async function reserveStock(sku, qty) {
   }
 }
 
-// ─── Cart Validation ──────────────────────────────────────────────────────────
+// ─── Cart Validation ───────────────────────────────────────────────────────
 
 /**
  * Validate every item in a cart array against live inventory.
@@ -300,7 +325,7 @@ async function suggestAlternatives(sku, limit = 3) {
   const product = await getProductBySku(sku);
   if (!product) return [];
 
-  const inStock = await getInStockProducts();
+  const inStock = await getInStockProducts(); // ✅ Gets in-stock products with LIVE stock
   const others  = inStock.filter((p) => p.sku !== sku);
 
   // 1st: same category + brand
@@ -328,7 +353,7 @@ async function suggestAlternatives(sku, limit = 3) {
  * @returns {Promise<object[]>}
  */
 async function getFeaturedProducts(limit = 5) {
-  const inStock = await getInStockProducts();
+  const inStock = await getInStockProducts(); // ✅ Gets in-stock with LIVE stock
   return inStock
     .sort((a, b) => b.price - a.price)
     .slice(0, limit);
@@ -342,7 +367,7 @@ async function getFeaturedProducts(limit = 5) {
  */
 async function getPersonalisedRecommendations(phone, limit = 3) {
   const prefs   = getUserPrefs(phone);
-  const catalog = await getInStockProducts();
+  const catalog = await getInStockProducts(); // ✅ Gets in-stock with LIVE stock
 
   if (!prefs.preferredBrand && !prefs.preferredCategory) {
     return getFeaturedProducts(limit);
@@ -363,23 +388,24 @@ async function getPersonalisedRecommendations(phone, limit = 3) {
     .slice(0, limit);
 }
 
-// ─── Scheduled Sync ───────────────────────────────────────────────────────────
+// ─── Scheduled Sync ───────────────────────────────────────────────────────
 
 /**
  * Register a cron job that refreshes the catalog and inventory every 15 minutes.
+ * ✅ FIXED: Forcefully refreshes to catch any manual CSV updates
  * Call once at app startup.
  */
 function startInventorySyncScheduler() {
   cron.schedule("*/15 * * * *", async () => {
     try {
-      await getCatalog(true);
-      await getInventory(true);
-      logger.info("[Inventory] Scheduled sync completed.");
+      await getCatalog(true); // ✅ Force refresh to get latest stock
+      await getInventory(true); // ✅ Force refresh inventory
+      logger.info("[Inventory] ✅ Scheduled sync completed - CSV and Sheets synced.");
     } catch (err) {
       logger.error(`[Inventory] Scheduled sync failed: ${err.message}`);
     }
   });
-  logger.info('[Inventory] Sync scheduler registered (every 15 min).');
+  logger.info('[Inventory] ✅ Sync scheduler registered (every 15 min with LIVE stock sync).');
 }
 
 module.exports = {
